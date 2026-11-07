@@ -1286,6 +1286,16 @@ function tick() {
       // 落一步就在脚边冒一撮草、开一朵花 —— 一路踩出来的野花才自然
       const fx0 = 50 + walkX * 56;
       bloomFlower(fx0 + rnd(-3.5, 3.5), 0, { flower: true, scale: rnd(0.95, 1.2) });
+      // 每落一步踩一个脚印，左右脚交替
+      if (fxBack) {
+        const f = document.createElement('div');
+        f.className = 'fx-foot';
+        f.style.left = (50 + walkX * 56 + (walkStep % 2 ? 5 : -5)).toFixed(1) + '%';
+        f.style.top = '90%';
+        fxBack.appendChild(f);
+        setTimeout(() => f.remove(), 2800);
+      }
+
       // 脚边再补一撮纯草，不然「每一步都只蹦一朵花」还是像撒贴纸
       if (Math.random() < 0.7) {
         bloomFlower(fx0 + rnd(-15, 15), 0, {
@@ -1445,6 +1455,16 @@ function tick() {
       spinner.rotation.x += (0 - spinner.rotation.x) * Math.min(1, dt * 6);
     }
 
+    // 打字：两只手抬到身前，快速交替点动，像在敲键盘
+    if (typingHeat > 0.02) {
+      const k = typingHeat;
+      for (const arm of rig.arms) {
+        const ph = t * 15 + (arm.side === 'Left' ? 0 : Math.PI);
+        pitchBone(rig, arm.upper, 0.95 * k, 'z');
+        pitchBone(rig, arm.lower, (0.52 + Math.sin(ph) * 0.26) * k, 'z');
+      }
+    }
+
     // 扑击：两条胳膊一起往前伸，抓空了再收回来
     if (act === 'chase' && pounceLeap > 0.02) {
       const reach = pounceLeap;
@@ -1470,6 +1490,11 @@ function tick() {
 
   if (act !== lastActSent) {
     lastActSent = act;
+  }
+
+  // 停止打字后 0.4 秒把手放回去
+  if (typingHeat > 0 && performance.now() - typingAt > 400) {
+    typingHeat = Math.max(0, typingHeat - dt * 3);
   }
 
   // 播歌时跟着鼓点起伏：低频能量 → 上下颠 + 轻微左右摇
@@ -1570,6 +1595,14 @@ window.pet?.onSwitchModel((k) => {
 });
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });
+// 打字反应：主进程只告诉我们「还在打 / 停了」，不含任何键位内容
+let typingHeat = 0;
+let typingAt = 0;
+window.pet?.onTyping?.((d) => {
+  typingHeat = d && d.stop ? 0 : 1;
+  typingAt = performance.now();
+});
+
 // 视线跟随：鼠标在屏幕哪边，她就微微转头看过去（幅度很小，别像扭脖子）
 let gazeX = 0, gazeY = 0;
 window.pet?.onCursor?.((d) => {

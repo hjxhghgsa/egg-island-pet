@@ -477,6 +477,21 @@ app.whenReady().then(async () => {
     }, Number(process.env.PET_EVAL_DELAY || 5000));
   }
 
+  // 调试：PET_TYPING=1 直接打开键盘钩子，并在 12 秒后报告收到多少次按键
+  if (process.env.PET_TYPING) {
+    setTimeout(() => {
+      const ok = typingSet(true);
+      console.log('[typing] enabled =', ok, 'hookOk =', hookOk);
+    }, 2500);
+    // 每 5 秒报一次累计按键数，方便确认「真人打字时到底收不收得到」
+    let ticks = 0;
+    const probe = setInterval(() => {
+      ticks++;
+      console.log('[typing] keyCount =', keyCount, 'on =', typingOn);
+      if (ticks >= 24) { clearInterval(probe); app.isQuitting = true; app.quit(); }
+    }, 5000);
+  }
+
   // 调试：PET_CLICK=1 模拟连续点击，验证单点/双击/连击识别
   if (process.env.PET_CLICK) {
     setTimeout(async () => {
@@ -1336,6 +1351,59 @@ function startCare() {
   }, 30000);
 }
 
+/* ---------------- 跟着打字动（BETA，可关） ----------------
+   用 uiohook-napi 的全局键盘事件，但**只看「有没有按」和「按了几下」**：
+   回调里连事件对象都不接，键位、键值、输入内容一概不读取，也不写任何日志或磁盘。
+   关掉开关就 uIOhook.stop()，钩子彻底撤掉。
+   载入失败（缺预编译包 / 被安全软件拦）就静默降级，绝不影响桌宠本体。 */
+let hook = null;
+let hookOk = false;
+let keyCount = 0;
+let lastTypingSent = 0;
+let typingOn = false;
+
+function typingAvailable() {
+  if (hookOk) return true;
+  try {
+    const { uIOhook } = require('uiohook-napi');
+    hook = uIOhook;
+    hook.on('keydown', () => {
+      // 这里只 +1，不读事件参数 —— 拿不到也不需要知道你按了什么
+      keyCount++;
+      flushTyping(false);
+    });
+    return (hookOk = true);
+  } catch (e) {
+    console.log('[typing] hook unavailable:', e.message);
+    return false;
+  }
+}
+
+// 节流：最多 10 秒没动静就发一次「停了」，打字时 120ms 发一次
+function flushTyping(forceStop) {
+  const now = Date.now();
+  if (forceStop || now - lastTypingSent > 120) {
+    lastTypingSent = now;
+    sendWin('typing', { stop: !!forceStop });
+  }
+}
+
+function typingSet(on) {
+  if (on) {
+    if (!typingAvailable()) { petSay('这台机器上拿不到键盘事件，用不了哦'); return false; }
+    try {
+      hook.start();
+      typingOn = true;
+      petSay('好，我跟着你打字动～只数次数，不看你按了什么');
+      return true;
+    } catch (e) { petSay('开不起来：' + e.message); return false; }
+  }
+  typingOn = false;
+  try { hook && hook.stop(); } catch {}
+  flushTyping(true);
+  return false;
+}
+
 /* ---------------- 陪伴统计 ----------------
    同类桌宠（DeskPet / Toty）都有「今天陪了你多久」。
    只记两个数：今天累计陪伴分钟、今天完成了几次专注。按天归零。 */
@@ -1493,6 +1561,12 @@ ipcMain.on('context-menu', () => {
       }))
     },
     { label: '小蛋 开 / 关 (F)', click: () => sendWin('toggle-fairy') },
+    {
+      label: '跟着我打字动（只数次数，不记键位）',
+      type: 'checkbox',
+      checked: typingOn,
+      click: (item) => typingSet(item.checked)
+    },
     { label: '今天陪你多久', click: () => petSay(companionLine()) },
     { type: 'separator' },
     {
