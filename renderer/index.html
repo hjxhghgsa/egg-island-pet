@@ -193,6 +193,26 @@
     100% { transform: translate(var(--dx), 250px) rotate(320deg) scale(var(--s,1)); opacity: 0; }
   }
 
+  /* 连击数字：在她头顶弹一下再上飘淡出 */
+  .fx-combo {
+    position: absolute; left: 50%; top: 16%;
+    transform: translateX(-50%);
+    font: 800 26px/1 "Segoe UI", "Microsoft YaHei", sans-serif;
+    /* 白字在浅色壁纸上会彻底消失，改成粉字 + 四向白描边，深浅桌面都看得清 */
+    color: #ff3f86; letter-spacing: .5px;
+    text-shadow: -2px 0 rgba(255,255,255,.95), 2px 0 rgba(255,255,255,.95),
+                 0 -2px rgba(255,255,255,.95), 0 2px rgba(255,255,255,.95),
+                 0 4px 12px rgba(255,90,150,.55);
+    animation: comboPop 900ms cubic-bezier(.2,1.4,.4,1) forwards;
+    pointer-events: none;
+  }
+  @keyframes comboPop {
+    0%   { opacity: 0; transform: translateX(-50%) scale(.4); }
+    22%  { opacity: 1; transform: translateX(-50%) scale(1.18); }
+    40%  { transform: translateX(-50%) scale(1); }
+    100% { opacity: 0; transform: translateX(-50%) translateY(-26px) scale(.92); }
+  }
+
   /* 走路留下的脚印（Desktop Goose 那种）：踩在桌面上的痕迹，慢慢淡掉 */
   .fx-foot {
     position: absolute; width: 7px; height: 10px;
@@ -214,10 +234,11 @@
 
   /* 说话气泡：半透明玻璃 + 柔光 + 指向角色的小尖角 */
   #bubble {
-    position: fixed; left: 50%; top: 4%; transform: translate(-50%, 0);
+    position: fixed; left: 50%; top: 0.5%; transform: translate(-50%, 0);
     pointer-events: none; opacity: 0; z-index: 3;
-    max-width: 150px; padding: 6px 11px; border-radius: 16px;
-    font: 600 11.5px/1.45 "Microsoft YaHei", "PingFang SC", sans-serif;
+    max-width: 132px; padding: 3px 9px; border-radius: 12px;
+    /* 之前 4% + 11.5px 正好压在眼睛上，压到帽子边缘才行 */
+    font: 600 10.5px/1.4 "Microsoft YaHei", "PingFang SC", sans-serif;
     color: #6d4a5e; text-align: center; white-space: normal;
     /* backdrop-filter 在透明窗口里会在角色头后糊出一块黑斑，改用不透明度更高的渐变 */
     background: linear-gradient(180deg, rgba(255,255,255,.93), rgba(255,246,252,.87));

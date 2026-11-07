@@ -70,36 +70,6 @@ scene.add(holder);
 const spinner = new THREE.Group();  // 负责朝向摆动
 holder.add(spinner);
 
-/* ---------------- 地面软阴影 ----------------
-   桌宠最容易显得「贴在屏幕上」的原因就是没有影子。
-   一张径向渐变的椭圆贴在 y≈0，跳起来时缩小变淡，落地恢复。 */
-function softShadowTexture() {
-  // 用 256px + 七段渐变：段数太少、分辨率太低，在斜视角下会出现一圈圈色带和硬边
-  const c = document.createElement('canvas');
-  c.width = c.height = 256;
-  const g = c.getContext('2d');
-  const grd = g.createRadialGradient(128, 128, 8, 128, 128, 124);
-  const stops = [[0, 1], [0.35, 0.82], [0.55, 0.55], [0.7, 0.3], [0.82, 0.13], [0.92, 0.04], [1, 0]];
-  for (const [p, a] of stops) grd.addColorStop(p, 'rgba(52,42,46,' + (a * 0.16).toFixed(3) + ')');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, 256, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-const groundShadow = new THREE.Mesh(
-  new THREE.PlaneGeometry(0.92, 0.92),
-  new THREE.MeshBasicMaterial({
-    map: softShadowTexture(), transparent: true, depthWrite: false, opacity: 0.7
-  })
-);
-groundShadow.rotation.x = -Math.PI / 2;
-groundShadow.position.y = 0.006;
-groundShadow.position.z = 0.03;
-groundShadow.renderOrder = -1;
-holder.add(groundShadow);
-
 /* ---------------- 3D 柔光粒子 ----------------
    照蛋岛原站星星 shader 的思路写的软核 + 星芒粒子，替换掉之前的 CSS 圆点。
    所有星尘、连击、走路、秋千的环境光都用这一套。 */
@@ -255,16 +225,18 @@ function popBits(kind = 'love', n = 9) {
     return;
   }
 
+  // 粒子太大太密时，几十颗同时炸开会连成一圈「彩环」，看着很廉价。
+  // 现在：颗粒更小、数量更少、速度更快 —— 散开就看不见环了。
   sparks.burst({ x: 0, y: 0.84, z: 0.2 }, {
-    n: Math.min(46, Math.round(n * 2.2)),
+    n: Math.min(26, Math.round(n * 1.3)),
     colors,
-    speed: kind === 'star' ? 1.35 : 1.05,
-    up: 0.62,
-    jitter: 0.22,
-    sizeMin: 6,
-    sizeMax: 14,
-    lifeMin: 0.45,
-    lifeMax: 1.0
+    speed: kind === 'star' ? 1.5 : 1.15,
+    up: 0.6,
+    jitter: 0.26,
+    sizeMin: 3.5,
+    sizeMax: 8,
+    lifeMin: 0.35,
+    lifeMax: 0.85
   });
 }
 
@@ -340,12 +312,12 @@ function bloomFlower(xPct = 50, _yPct, opt = {}) {
   el.style.setProperty('--p2', pal.p2);
 
   // 1) 草叶先冒出来
-  const blades = opt.flower === false ? 4 : 3;
+  const blades = opt.flower === false ? 8 : 3;   // 纯草丛只画 4 根会像一根绿色勾
   for (let i = 0; i < blades; i++) {
     const b = document.createElement('span');
     b.className = 'blade';
     b.style.setProperty('--a', rnd(-40, 40).toFixed(0) + 'deg');
-    b.style.setProperty('--h', (rnd(9, 19) * s).toFixed(1) + 'px');
+    b.style.setProperty('--h', (rnd(7, 14) * s).toFixed(1) + 'px');
     b.style.setProperty('--d', (i * 65).toFixed(0) + 'ms');
     el.appendChild(b);
   }
@@ -773,6 +745,8 @@ const pointer = new THREE.Vector2();
 let hovering = false;
 let dragging = false;      // 左键：旋转角色
 let movingWin = false;     // 右键：拖窗口
+let lastWinX = 0;
+let dragTilt = 0;          // 被拎起来时的倾斜
 let winMoved = false;
 let eggTapped = false;
 let lastX = 0;
@@ -811,6 +785,11 @@ window.addEventListener('pointermove', (ev) => {
     return;
   }
   if (movingWin) {
+    if (ev.clientX !== lastWinX) {
+      const d = ev.clientX - lastWinX;
+      lastWinX = ev.clientX;
+      dragTilt = Math.max(-0.22, Math.min(0.22, dragTilt - d * 0.012));
+    }
     winMoved = true;
     window.pet?.dragMove();
     return;
@@ -824,6 +803,8 @@ window.addEventListener('pointerdown', (ev) => {
     ev.preventDefault();
     movingWin = true;
     winMoved = false;
+    lastWinX = ev.clientX;
+    dragTilt = 0;
     window.pet?.dragStart();
     startDragPoll();
     return;
@@ -1040,6 +1021,13 @@ function tap() {
     for (let i = 0; i < Math.min(3, combo); i++) {
       setTimeout(() => bloomFlower(18 + Math.random() * 64, 64 + Math.random() * 22), i * 110);
     }
+  }
+  if (combo >= 3 && fxLayer) {
+    const num = document.createElement('div');
+    num.className = 'fx-combo';
+    num.textContent = '×' + combo;
+    fxLayer.appendChild(num);
+    setTimeout(() => num.remove(), 950);
   }
   if (COMBO_TIERS[combo]) {
     COMBO_TIERS[combo]();
@@ -1514,6 +1502,15 @@ function tick() {
     typingHeat = Math.max(0, typingHeat - dt * 3);
   }
 
+  // 花瓣雨：持续的落花，拍照很好看那种
+  if (petalRain) {
+    rainTimer -= dt;
+    if (rainTimer <= 0) {
+      rainTimer = 0.32 + Math.random() * 0.22;
+      petalFall(1);
+    }
+  }
+
   // 播歌时跟着鼓点起伏：低频能量 → 上下颠 + 轻微左右摇
   if (analyser && !audio.paused) {
     analyser.getByteFrequencyData(analyserData);
@@ -1530,12 +1527,14 @@ function tick() {
     spinner.rotation.z = Math.sin(t * 6.4) * beat * 0.07;
   }
 
-  // 影子跟着高度变化：跳起来缩小、变淡，落地恢复，才有「踩在地上」的感觉
-  const lift = Math.max(0, spinner.position.y - baseY);
-  const shrink = Math.max(0.45, 1 - lift * 0.9);
-  groundShadow.scale.setScalar(shrink);
-  groundShadow.material.opacity = 0.7 * Math.min(1, shrink + 0.15);
-  groundShadow.position.x = spinner.position.x * 0.85;
+  // 被拎起来时整个身子跟着晃，松手回正
+  if (movingWin) {
+    dragTilt += Math.sin(t * 9) * 0.004;                 // 一点点自然摆动
+    spinner.rotation.z = dragTilt;
+  } else if (Math.abs(dragTilt) > 0.001) {
+    dragTilt *= Math.exp(-dt * 6);
+    spinner.rotation.z += (dragTilt - spinner.rotation.z) * Math.min(1, dt * 10);
+  }
 
   sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算
   renderer.render(scene, camera);
@@ -1617,6 +1616,10 @@ let typingHeat = 0;
 let typeFxTimer = 0;
 let typingAt = 0;
 let typeHit = 0;                 // 每一次按键的冲击，衰减很快
+let petalRain = false;
+let rainTimer = 0;
+window.pet?.onToggleRain?.((on) => { petalRain = !!on; });
+
 window.pet?.onTyping?.((d) => {
   typingAt = performance.now();
   if (d && d.stop) { typingHeat = 0; return; }

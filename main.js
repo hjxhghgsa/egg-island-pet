@@ -110,6 +110,8 @@ function showPet({ focus = false } = {}) {
 }
 
 function hidePet() {
+  stopFling();
+  stopGlide();
   if (!win || win.isDestroyed() || !win.isVisible()) return;
   win.webContents.send('pet-pause');
   win.hide();
@@ -642,6 +644,9 @@ app.whenReady().then(async () => {
   if (process.env.PET_SHOT_WIN) {
     setTimeout(async () => {
       try {
+        if (process.env.PET_HIDE_FX) {
+          await win.webContents.executeJavaScript(`document.getElementById('fx').style.display='none'; document.getElementById('bubble').style.display='none'; 'ok'`);
+        }
         const img = await win.webContents.capturePage();
         fs.writeFileSync(process.env.PET_SHOT_WIN, img.toPNG());
         console.log('win shot saved');
@@ -708,6 +713,10 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   try { globalShortcut.unregisterAll(); } catch {}
+  // 退出时把键盘钩子放掉，别在系统里留一个悬挂的输入钩子
+  try { hook && hook.stop(); } catch {}
+  stopFling();
+  stopGlide();
 });
 
 // ---- IPC ----
@@ -728,6 +737,7 @@ let flingTimer = null;
 ipcMain.on('drag-start', () => {
   if (!win) return;
   stopFling();
+  stopGlide();
   const cursor = screen.getCursorScreenPoint();
   const b = win.getBounds();
   dragOrigin = { dx: cursor.x - b.x, dy: cursor.y - b.y };
@@ -805,9 +815,15 @@ function stopFling() {
   if (flingTimer) { clearInterval(flingTimer); flingTimer = null; }
 }
 
+// 吸边滑行也要能被打断，否则它和甩出滑行会同时 setBounds，窗口抖成筛子
+function stopGlide() {
+  if (glideTimer) { clearInterval(glideTimer); glideTimer = null; }
+}
+
 // 甩出去：每帧位移衰减，撞到工作区边缘反弹，慢下来就停并记住位置
 function startFling(sx, sy) {
   stopFling();
+  stopGlide();
   let vx = Math.max(-60, Math.min(60, sx));
   let vy = Math.max(-60, Math.min(60, sy));
   flingTimer = setInterval(() => {
@@ -1408,6 +1424,7 @@ let hookOk = false;
 let keyCount = 0;
 let lastTypingSent = 0;
 let typingOn = false;
+let petalRainOn = false;
 
 function typingAvailable() {
   if (hookOk) return true;
@@ -1437,6 +1454,7 @@ function flushTyping(forceStop) {
 
 function typingSet(on) {
   if (on) {
+    if (typingOn) return true;
     if (!typingAvailable()) { petSay('这台机器上拿不到键盘事件，用不了哦'); return false; }
     try {
       hook.start();
@@ -1615,6 +1633,12 @@ ipcMain.on('context-menu', () => {
       click: (item) => typingSet(item.checked)
     },
     { label: '今天陪你多久', click: () => petSay(companionLine()) },
+    {
+      label: '花瓣雨',
+      type: 'checkbox',
+      checked: !!petalRainOn,
+      click: (item) => { petalRainOn = item.checked; sendWin('toggle-rain', petalRainOn); }
+    },
     { type: 'separator' },
     {
       label: '换个角色',
