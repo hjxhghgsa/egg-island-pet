@@ -193,6 +193,26 @@
     100% { transform: translate(var(--dx), 250px) rotate(320deg) scale(var(--s,1)); opacity: 0; }
   }
 
+  /* 贴边提示：拖动时靠近哪条边，那条边就亮一下，让"会被吸住"看得见 */
+  #edgeHint {
+    position: fixed; inset: 0; pointer-events: none; z-index: 4;
+    opacity: 0; transition: opacity .16s ease;
+  }
+  #edgeHint.on { opacity: 1; }
+  #edgeHint::before {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 14px;
+    background: linear-gradient(90deg, rgba(255,140,190,.55), rgba(255,140,190,0));
+  }
+  #edgeHint.left::before { left: 0; }
+  #edgeHint.right::before { right: 0; transform: scaleX(-1); left: auto; }
+  #edgeHint::after {
+    content: ''; position: absolute; left: 0; right: 0; height: 12px;
+    background: linear-gradient(180deg, rgba(255,140,190,.5), rgba(255,140,190,0));
+    opacity: 0;
+  }
+  #edgeHint.top::after { top: 0; opacity: 1; }
+  #edgeHint.bottom::after { bottom: 0; top: auto; opacity: 1; transform: scaleY(-1); }
+
   /* 连击数字：在她头顶弹一下再上飘淡出 */
   .fx-combo {
     position: absolute; left: 50%; top: 16%;
@@ -266,6 +286,7 @@
 </head>
 <body>
 <canvas id="stage"></canvas>
+<div id="edgeHint"></div>
 <div id="fx"></div>
 <div id="bubble"></div>
 <div id="err"></div>

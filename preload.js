@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('pet', {
   onToggleRain: (cb) => ipcRenderer.on('toggle-rain', (_e, on) => cb(on)),
   onPeek: (cb) => ipcRenderer.on('peek', (_e, edge) => cb(edge)),
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, idle) => cb(idle)),
+  onNearEdge: (cb) => ipcRenderer.on('near-edge', (_e, edge) => cb(edge)),
   onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),
   onSummon: (cb) => ipcRenderer.on('summon', () => cb()),
   // 窗口被收起时让 3D 渲染整体休眠，别在后台空转

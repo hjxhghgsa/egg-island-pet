@@ -494,6 +494,21 @@ app.whenReady().then(async () => {
     }, 5000);
   }
 
+  // 调试：PET_EDGE=left|right 把她怼到那条边并触发探头，用来验收吸附效果
+  if (process.env.PET_EDGE) {
+    setTimeout(() => {
+      try {
+        const b = win.getBounds();
+        const area = screen.getDisplayMatching(b).workArea;
+        const x = process.env.PET_EDGE === 'left' ? area.x : area.x + area.width - WIN_W;
+        win.setBounds({ x, y: b.y, width: WIN_W, height: WIN_H });
+        sendWin('near-edge', process.env.PET_EDGE);
+        sendWin('peek', process.env.PET_EDGE);
+        console.log('[edge-test]', process.env.PET_EDGE, x);
+      } catch (e) { console.log('[edge-test fail]', e.message); }
+    }, 5000);
+  }
+
   // 调试：PET_TYPE_DEMO=1 持续发「正在打字」，方便截图看手部动作
   if (process.env.PET_TYPE_DEMO) {
     setTimeout(() => {
@@ -732,6 +747,7 @@ ipcMain.on('hover-state', (_e, hovering) => {
 // 拖动：渲染层按下后，主进程跟踪光标
 let lastDragPoint = null;
 let dragTrail = [];        // 最近的拖动采样，用来算松手速度
+let dragNearEdge = null;    // 拖动时最近的那条边，用来提前提示
 let flingTimer = null;
 
 ipcMain.on('drag-start', () => {
@@ -754,10 +770,30 @@ ipcMain.on('drag-move', () => {
   lastDragPoint = { x: cursor.x, y: cursor.y };
   dragTrail.push({ x: cursor.x, y: cursor.y, t: Date.now() });
   if (dragTrail.length > 8) dragTrail.shift();
+  let nx = cursor.x - dragOrigin.dx;
+  let ny = cursor.y - dragOrigin.dy;
+
+  // 拖动中就给磁力：离边缘 48px 内直接被吸过去，松手前你就能感觉到
+  const area = screen.getDisplayMatching({ x: Math.round(nx), y: Math.round(ny), width: WIN_W, height: WIN_H }).workArea;
+  const MAG = 48;
+  const dl = nx - area.x;
+  const dr = area.x + area.width - (nx + WIN_W);
+  const dt2 = ny - area.y;
+  const db = area.y + area.height - (ny + WIN_H);
+  let near = null;
+  if (dl >= 0 && dl < MAG) { nx = area.x; near = 'left'; }
+  else if (dr >= 0 && dr < MAG) { nx = area.x + area.width - WIN_W; near = 'right'; }
+  if (dt2 >= 0 && dt2 < MAG) { ny = area.y; near = near || 'top'; }
+  else if (db >= 0 && db < MAG) { ny = area.y + area.height - WIN_H; near = near || 'bottom'; }
+  if (near !== dragNearEdge) {
+    dragNearEdge = near;
+    sendWin('near-edge', near);       // 让渲染层提前亮一下"要贴边了"
+  }
+
   // 带尺寸一起写，保证拖动过程中窗口永远不会被拉大
   win.setBounds({
-    x: cursor.x - dragOrigin.dx,
-    y: cursor.y - dragOrigin.dy,
+    x: Math.round(nx),
+    y: Math.round(ny),
     width: WIN_W,
     height: WIN_H
   });
@@ -869,6 +905,9 @@ ipcMain.on('drag-end', () => {
     }
   }
   dragTrail = [];
+
+  dragNearEdge = null;
+  sendWin('near-edge', null);
 
   // 甩得够快就滑一段，慢慢蹭过去的那点速度不算
   if (Math.hypot(vx, vy) > 0.7) {

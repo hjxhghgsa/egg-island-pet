@@ -144,16 +144,15 @@ kbGroup.add(kbMesh);
 // 抬到腰上、倾 ~58°，才既不像屏幕对着观众、又能看清键面。
 // 键面必须朝上偏她那一侧（rotation 越接近 -PI/2 越水平），
 // 之前 -0.95 还是把键面斜向镜头，看起来就像屏幕冲着你。
-// 纯水平 → 一条线；纯倾斜 → 像屏幕。折中：绕 Y 侧转 ~27°，从斜上方看到键面
-kbGroup.position.set(0.02, 0.27, 0.42);
-// 绕 Y 多转一些（~54°），它就成了一个斜放的平行四边形，
-// 一眼能看出是「躺着的物件」而不是正对你的屏幕
-kbGroup.rotation.y = 0.95;
-kbGroup.rotation.x = -0.72;
+/* 键盘按物理摆正：键面朝上，并往她那边压 7°，键是冲她的，不是冲镜头的。
+   代价是相机在她眼睛高度、键盘在腰上，视角只有 ~9°，
+   所以正面基本看不到键帽，只能看到一块薄板的边缘 —— 这是真实几何的结果。 */
+kbGroup.position.set(0, 0.27, 0.40);
+kbGroup.rotation.set(-1.69, 0, 0);
 
 // 给键盘加一点厚度，侧看才不会像一张纸
 const kbBody = new THREE.Mesh(
-  new THREE.BoxGeometry(0.44, 0.016, 0.165),
+  new THREE.BoxGeometry(0.46, 0.03, 0.175),
   new THREE.MeshStandardMaterial({ color: 0x3a3344, roughness: 0.6, metalness: 0.12 })
 );
 kbBody.position.z = -0.006;
@@ -1173,6 +1172,11 @@ window.addEventListener('dblclick', (ev) => {
 });
 
 window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
+window.__pet.peekState = () => JSON.stringify({
+  peekEdge, peekAmt: +peekAmt.toFixed(2), hovering,
+  holderX: +holder.position.x.toFixed(3), canvasW: innerWidth
+});
+
 window.__pet.fairyPos = () => [
   +fairy.position.x.toFixed(3), +fairy.position.y.toFixed(3), +fairy.position.z.toFixed(3)
 ];
@@ -1457,9 +1461,12 @@ function tick() {
     walkStep = 0;
   }
   // 探头：贴着屏幕左边就往左探出，右边同理；鼠标移到她身上会缩回去
-  const peekWant = (peekEdge === 'left' || peekEdge === 'right') && !hovering ? 1 : 0;
+  const canPeek = (peekEdge === 'left' || peekEdge === 'right')
+    && (!hovering || performance.now() < peekForceUntil);
+  const peekWant = canPeek ? 1 : 0;
   peekAmt += (peekWant - peekAmt) * Math.min(1, dt * 5);
-  const peekOff = (peekEdge === 'left' ? -1 : 1) * 0.34 * peekAmt;
+  // 探头幅度加大到 0.5：0.34 只够挪 50px，看着像"没动"
+  const peekOff = (peekEdge === 'left' ? -1 : 1) * 0.5 * peekAmt;
   holder.position.x = walkX + peekOff;
 
   // 撒花：四周依次绽开，偶尔飘落花瓣
@@ -1828,7 +1835,20 @@ window.pet?.onToggleRain?.((on) => { petalRain = !!on; });
 // 贴到屏幕左右边时「探出头」：把身体往窗外推，被窗口裁掉一半
 let peekEdge = null;
 let peekAmt = 0;
-window.pet?.onPeek?.((edge) => { peekEdge = edge || null; });
+let peekForceUntil = 0;
+window.pet?.onPeek?.((edge) => {
+  peekEdge = edge || null;
+  // 松手时光标还在她身上（hovering=true）会立刻取消探头，
+  // 所以贴边后先强制保持 6 秒，之后再由 hover 决定。
+  if (peekEdge) peekForceUntil = performance.now() + 6000;
+});
+
+// 拖动中靠近边缘：先亮一条提示，让人知道"会被吸住"
+const edgeHint = document.getElementById('edgeHint');
+window.pet?.onNearEdge?.((edge) => {
+  if (!edgeHint) return;
+  edgeHint.className = edge ? 'on ' + edge : '';
+});
 
 // 你离开电脑她就睡，你回来她就醒
 window.pet?.onUserIdle?.((idle) => {
