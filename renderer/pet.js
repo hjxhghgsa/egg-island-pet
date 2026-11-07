@@ -922,12 +922,36 @@ let tapCount = 0;
 let lastTapAt = 0;
 let tapTimer = null;
 let dblTimer = null;
+let musicTimer = null;
 let comboMode = false;       // 已判定为连击：期间稳住角色、不乱切歌、不误开聊天
 
 const CLICK_GAP = 430;        // 两次点击间隔小于它算「连续」
 const COMBO_IDLE = 1200;       // 多久没点就退出连击
 
 const TAP_LINES = ['嘿嘿~', '别戳啦', '有点痒!', '再来一下?', '呀!', '陪我玩嘛', '今天也辛苦啦', '被你发现啦'];
+
+// 整十连击各给一套不同的庆祝，不再每档都只是「花开啦」
+const COMBO_TIERS = {
+  10: () => { popBits('star', 30); petalFall(6); showBubble('×10 满天星!', 2400); },
+  20: () => {
+    for (let i = 0; i < 10; i++) {
+      setTimeout(() => bloomFlower(10 + i * 8, 0, { flower: true, scale: 1.15 }), i * 70);
+    }
+    petalFall(10);
+    showBubble('×20 花海!', 2600);
+  },
+  30: () => {
+    petalFall(20);
+    popBits('petal', 44);
+    showBubble('×30 落樱!', 2800);
+  },
+  40: () => {
+    for (let r = 0; r < 3; r++) {
+      setTimeout(() => { popBits('star', 36); petalFall(12); }, r * 260);
+    }
+    showBubble('×40 手不累吗!', 3200);
+  }
+};
 
 function tap() {
   const now = performance.now();
@@ -942,29 +966,36 @@ function tap() {
   clearTimeout(tapTimer);
   tapTimer = setTimeout(() => { tapCount = 0; comboMode = false; }, COMBO_IDLE);
 
-  // 每一击都立刻给反馈，绝不延迟等判定 —— 以前 330ms 内第二下会被吞掉去开聊天
   const combo = tapCount;
+  // 连击到 10 以后每一下都撒花会堆满 DOM、明显掉帧，改成只在整十档爆发
+  const heavy = combo >= 10;
   popBits(combo >= 4 ? 'star' : 'love', Math.min(20, 6 + combo * 2));
-  if (combo >= 3) {
-    for (let i = 0; i < Math.min(6, combo); i++) {
+  if (!heavy) {
+    for (let i = 0; i < Math.min(3, combo); i++) {
       setTimeout(() => bloomFlower(18 + Math.random() * 64, 64 + Math.random() * 22), i * 110);
     }
-    showBubble(combo >= 6 ? '×' + combo + ' 连击！花开啦~' : '×' + combo + ' 连击!');
-  } else {
+  }
+  if (COMBO_TIERS[combo]) {
+    COMBO_TIERS[combo]();
+  } else if (combo < 3) {
     showBubble(TAP_LINES[Math.floor(Math.random() * TAP_LINES.length)]);
+  } else if (!heavy) {
+    showBubble('×' + combo + ' 连击!');
   }
 
   if (combo < 3) {
-    jumpVel = 2.4;                     // 单点 / 双击：照旧蹦一下、转一点
-    yawVel = 1.1;
-    lastRotateAt = now;                // 必须与 tick 同源，否则回正永远不触发
+    jumpVel = 2.4;                     // 单击 / 双击：蹦一下
   } else {
     // 连击：只用压扁代替起跳，角色位置几乎不动，才不会「点着点着点空」
     squash = 0.92;
-    yawVel *= 0.2;
     jumpVel = 0.8;
   }
-  if (combo === 1) toggleMusic();       // 只有单点切歌，连击时音乐不再一下开一下关
+
+  // 单点才切歌：延到「确认没有第二下」再切，连击过程中音乐完全不动
+  clearTimeout(musicTimer);
+  musicTimer = setTimeout(() => {
+    if (!comboMode && tapCount === 1) toggleMusic();
+  }, 320);
 }
 
 // 双击开聊天交给浏览器原生判定；再等 300ms 看会不会来第 3 下，
@@ -1178,9 +1209,11 @@ function tick() {
     1 + (1 - squash) * 0.55
   );
 
-  /* 朝向：手动旋转带惯性；静置约 1.8 秒自动回正面 */
+  /* 朝向：手动旋转带惯性；停手 1.1 秒就回正面。
+     之前「老在转」有两个原因：静置时叠了 ±0.16 的 idleSway 左右摇，
+     加上追小精灵时整个人转 ±0.55 —— 现在都收掉，默认永远朝前。 */
   if (act === 'chase') {
-    yaw = Math.sin(t * 2.1) * 0.55;       // 追着小精灵转头
+    yaw = Math.sin(t * 2.1) * 0.16;       // 追着小精灵只要一点点侧身，不是整个转圈
     yawVel = 0;
     lastRotateAt = now;
   } else if (act === 'spin') {
@@ -1194,15 +1227,13 @@ function tick() {
   }
 
   if (act !== 'spin' && act !== 'chase' && !dragging &&
-      now - lastRotateAt > 1800 && Math.abs(yaw) > 0.02) {
+      now - lastRotateAt > 1100 && Math.abs(yaw) > 0.02) {
     const target = Math.round(yaw / TAU) * TAU;
-    yaw += (target - yaw) * Math.min(1, dt * 3.2);
+    yaw += (target - yaw) * Math.min(1, dt * 4.2);
     if (Math.abs(yaw - target) < 0.008) yaw = 0;  // 整圈等价于 0，避免数值累积
     yawVel = 0;
   }
-  const idleSway = Math.abs(yaw) < 0.02 && (act === 'idle' || act === 'sit' || act === 'sleep')
-    ? Math.sin(t * 0.42) * 0.16 : 0;
-  spinner.rotation.y = yaw + idleSway;
+  spinner.rotation.y = yaw;
 
   /* 骨骼 */
   if (rigReady && modelRoot) {
@@ -1218,16 +1249,18 @@ function tick() {
     });
 
     const rig = modelRoot.userData.islandRig;
-    // 坐姿：绕骨骼自身局部轴，大腿前伸、小腿自然垂下、脚掌放松，荡的时候跟着轻晃
+    // 坐姿：绕骨骼自身局部轴。秋千必须真的「坐」下去 —— 大腿前伸接近水平、
+    // 小腿折回来垂在座板前，只留鞋尖。之前大腿往后收 +0.30，看着就是
+    // 「站在秋千前面、背后挂个秋千」，所以秋千单独一套角度。
     if (rig && sitBlend > 0.002) {
-      const kick = act === 'swing' ? Math.sin(t * 1.65) * 0.10 : 0;
+      const onSwing = act === 'swing';
+      const kick = onSwing ? Math.sin(t * 1.65) * 0.10 : 0;
       for (const leg of rig.legs) {
         const side = leg.side === 'Left' ? 1 : -1;
-        // 腿往裙摆后面收：正面只留一点鞋尖，别把整条小腿露出来。
-        // 模型是单个 mesh，改不了裙长，只能靠姿态把腿藏进原有裙摆里。
-        pitchBone(rig, leg.upper, (0.30 + kick * 0.20) * sitBlend);
-        pitchBone(rig, leg.lower, (-0.24 - kick * 0.16) * sitBlend);
-        pitchBone(rig, leg.foot, (-0.06 + kick * 0.22 + side * 0.01) * sitBlend);
+        // 坐（sit/sleep）仍走「往裙摆后面收」，只露鞋尖
+        pitchBone(rig, leg.upper, ((onSwing ? -0.92 : 0.30) + kick * 0.20) * sitBlend);
+        pitchBone(rig, leg.lower, ((onSwing ? 1.05 : -0.24) - kick * 0.16) * sitBlend);
+        pitchBone(rig, leg.foot, ((onSwing ? -0.10 : -0.06) + kick * 0.22 + side * 0.01) * sitBlend);
       }
     }
     softenHands(rig, act === 'wave', t);

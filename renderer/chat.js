@@ -215,8 +215,13 @@ async function startAsr(ev) {
   $('mic').classList.add('rec');
   setVoiceLayer(true, false);
   $('vText').textContent = '正在听…';
+  // 第一次按要加载 78MB 模型（约 1.3s），给个明确反馈，别让人以为没反应
+  const slow = setTimeout(() => {
+    if (asrOn) $('vText').textContent = '正在热识别引擎…';
+  }, 420);
   try {
     const r = await window.pet.asrStart();
+    clearTimeout(slow);
     if (!r.ok) throw new Error(r.error || '识别引擎没起来');
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
@@ -233,6 +238,7 @@ async function startAsr(ev) {
       window.pet.asrChunk(f.buffer);
     };
   } catch (err) {
+    clearTimeout(slow);
     stopAsr(true);
     tip('语音输入起不来：' + (err.message || err));
   }

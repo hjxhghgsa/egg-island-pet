@@ -383,6 +383,7 @@ app.whenReady().then(async () => {
           for (let i = 0; i < all.length; i += 1600) {
             window.pet.asrChunk(new Float32Array(all.slice(i, i + 1600)).buffer);
           }
+          await new Promise((r) => setTimeout(r, 200));   // 等主进程收完排队的分块
           return JSON.stringify(await window.pet.asrEnd());
         })()`);
         console.log('[asr-ipc]', r);
@@ -404,19 +405,15 @@ app.whenReady().then(async () => {
         if (!fs.existsSync(raw)) { console.log('[asr-test] no raw'); }
         else {
           const buf = fs.readFileSync(raw);
-          const all = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+          const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+          const all = new Float32Array(ab);
           console.log('[asr-test] step1 samples', all.length);
           const rec = getAsr();
           console.log('[asr-test] step2 recognizer ok');
           const s = rec.createStream();
-          console.log('[asr-test] step3 stream ok');
-          for (let i = 0; i < all.length; i += 1600) {
-            s.acceptWaveform({ samples: new Float32Array(all.slice(i, i + 1600)), sampleRate: 16000 });
-            while (rec.isReady(s)) rec.decode(s);
-          }
-          console.log('[asr-test] step4 fed');
-          s.inputFinished();
-          while (rec.isReady(s)) rec.decode(s);
+          s.acceptWaveform({ samples: all, sampleRate: 16000 });
+          rec.decode(s);
+          console.log('[asr-test] step3 decoded');
           const rawText = rec.getResult(s).text;
           console.log('[asr-test] RESULT', JSON.stringify(rawText));
           const polished = await polishAsr(rawText);
@@ -705,6 +702,9 @@ function openChat() {
   });
   chatWin.setMenu(null);
   chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'));
+  // 一打开聊天窗就在后台把语音模型热起来（约 1.3s，78MB），
+  // 否则第一次按「按住说话」要干等模型加载，前面几个字会被吞掉。
+  setTimeout(() => { try { getAsr(); } catch (e) { console.log('[asr warmup]', e.message); } }, 1200);
   chatWin.on('closed', () => {
     chatWin = null;
     // 关掉聊天后把她放回来
@@ -891,39 +891,55 @@ ipcMain.handle('chat', async (_e, messages) => {
 });
 
 /* ---------------- 离线语音输入：微信式「按住说话」 ----------------
-   识别引擎用 sherpa-onnx 的中英双语 streaming zipformer，全程在本机跑，
-   不连 Google、不上传音频。微信输入法的识别服务是私有的、没有公开接口可内嵌；
-   这里用「本地流式模型 + 大模型纠错 + 意图判断」把「听得清 / 听得懂」补回来。 */
-const ASR_DIR = path.join(__dirname, 'models', 'asr');
+   引擎用 sherpa-onnx 的 Paraformer 中文模型，全程在本机跑，不连 Google、不上传音频。
+   微信输入法的识别服务是私有的、没有公开接口可内嵌；这里用「本地识别 + 大模型纠错 + 本地意图兜底」
+   把「听得清 / 听得懂」补回来。
+
+   为什么从流式 zipformer 换到 Paraformer：同一批语料实测（Edge TTS 合成、真人相近的语速），
+   流式 int8 模型平均字错率 25.6%，而且会在长音上打转（「放首歌听听吧」→「放手歌听听听听听吧」）；
+   Paraformer 平均 0.0%、5 秒音频只要 50ms，模型还从 174MB 降到 78MB。
+   代价是非流式、没有原生边说边出字 —— 用「积一段、重解一次」做增量预览补上。 */
+const ASR_DIR = path.join(__dirname, 'models', 'asr-para');
 let asrRecognizer = null;
-let asrStream = null;
+let asrBufs = [];            // 本次按住说话累积的音频块（Float32Array）
+let asrSamples = 0;          // 已累积的采样点数
+let asrPreviewAt = 0;        // 上次增量预览的时间
 let asrLastText = '';
 let asrSender = null;
+let asrBusy = false;
 
 function getAsr() {
   if (asrRecognizer) return asrRecognizer;
-  const { OnlineRecognizer } = require('sherpa-onnx-node');
-  const f = (n) => path.join(ASR_DIR, n);
-  asrRecognizer = new OnlineRecognizer({
+  const { OfflineRecognizer } = require('sherpa-onnx-node');
+  asrRecognizer = new OfflineRecognizer({
     featConfig: { sampleRate: 16000, featureDim: 80 },
     modelConfig: {
-      transducer: {
-        encoder: f('encoder-epoch-99-avg-1.int8.onnx'),
-        decoder: f('decoder-epoch-99-avg-1.int8.onnx'),
-        joiner: f('joiner-epoch-99-avg-1.int8.onnx')
-      },
-      tokens: f('tokens.txt'),
-      bpeVocab: f('bpe.model'),
-      modelingUnit: 'bpe',
+      paraformer: { model: path.join(ASR_DIR, 'model.int8.onnx') },
+      tokens: path.join(ASR_DIR, 'tokens.txt'),
       numThreads: 2,
-      debug: false,
-      provider: 'cpu'
+      provider: 'cpu',
+      debug: false
     },
-    decodingMethod: 'greedy_search',
-    maxActivePaths: 4,
-    enableEndpoint: false            // 按住说话是一次完整短句，不做断句
+    decodingMethod: 'greedy_search'
   });
   return asrRecognizer;
+}
+
+function asrConcat() {
+  const out = new Float32Array(asrSamples);
+  let off = 0;
+  for (const b of asrBufs) { out.set(b, off); off += b.length; }
+  return out;
+}
+
+// 非流式：整段一次解码。5 秒音频约 50ms，所以「重解一遍」比维护流式状态更划算。
+function asrDecodeAll() {
+  if (!asrSamples) return '';
+  const rec = getAsr();
+  const st = rec.createStream();
+  st.acceptWaveform({ samples: asrConcat(), sampleRate: 16000 });
+  rec.decode(st);
+  try { return (rec.getResult(st).text || '').trim(); } catch { return ''; }
 }
 
 function asrEmit(channel, data) {
@@ -934,9 +950,7 @@ function asrEmit(channel, data) {
 }
 
 function asrDecode() {
-  if (!asrRecognizer || !asrStream) return '';
-  while (asrRecognizer.isReady(asrStream)) asrRecognizer.decode(asrStream);
-  try { return (asrRecognizer.getResult(asrStream).text || '').trim(); } catch { return ''; }
+  return asrDecodeAll();
 }
 
 // 本地意图识别：断网 / API 超时也必须能听懂指令。
@@ -1014,8 +1028,10 @@ async function polishAsr(raw) {
 
 ipcMain.handle('asr-start', (e) => {
   try {
-    const rec = getAsr();
-    asrStream = rec.createStream();
+    getAsr();                        // 先把模型载进内存（约 1.4s，只在第一次）
+    asrBufs = [];
+    asrSamples = 0;
+    asrPreviewAt = 0;
     asrLastText = '';
     asrSender = e.sender;
     return { ok: true };
@@ -1024,20 +1040,35 @@ ipcMain.handle('asr-start', (e) => {
   }
 });
 
+// 增量预览：每 0.9 秒把已收到的音频整段重解一次，做出「边说边出字」的效果。
+// 只在音频不到 12 秒时预览，避免长时间按住时反复解码拖慢主进程。
+const ASR_PREVIEW_GAP = 900;
+const ASR_PREVIEW_MAX = 16000 * 12;
+
 ipcMain.on('asr-chunk', (_e, buf) => {
-  if (!asrStream || !asrRecognizer) return;
   try {
-    const incoming = new Float32Array(buf);
+    const incoming = buf instanceof Float32Array ? buf : new Float32Array(buf);
     if (!incoming.length) return;
-    // 再复制一层：Electron 会拒绝 native external buffer，
-    // 复制成普通 JS Float32Array 后 addon 才收（readWave 就栽在这里）
+    // 复制一层：Electron 传过来的是 external buffer，addon 只收普通 JS Float32Array
     const samples = new Float32Array(incoming.length);
     samples.set(incoming);
-    asrStream.acceptWaveform({ samples, sampleRate: 16000 });
-    const text = asrDecode();
-    if (text && text !== asrLastText) {
-      asrLastText = text;
-      asrEmit('asr-partial', { text });
+    asrBufs.push(samples);
+    asrSamples += samples.length;
+
+    const now = Date.now();
+    if (asrBusy || asrSamples < 16000 * 0.6) return;
+    if (asrSamples > ASR_PREVIEW_MAX) return;
+    if (now - asrPreviewAt < ASR_PREVIEW_GAP) return;
+    asrPreviewAt = now;
+    asrBusy = true;
+    try {
+      const text = asrDecodeAll();
+      if (text && text !== asrLastText) {
+        asrLastText = text;
+        asrEmit('asr-partial', { text });
+      }
+    } finally {
+      asrBusy = false;
     }
   } catch (err) {
     asrEmit('asr-error', { error: String((err && err.message) || err) });
@@ -1045,21 +1076,30 @@ ipcMain.on('asr-chunk', (_e, buf) => {
 });
 
 ipcMain.handle('asr-end', async () => {
-  if (!asrStream || !asrRecognizer) return { text: '', intent: 'chat', action: 'none' };
+  if (!asrSamples) return { text: '', intent: 'chat', action: 'none' };
   try {
-    asrStream.inputFinished();
-    const text = asrDecode() || asrLastText;
-    asrStream = null;
+    asrBusy = true;
+    const text = asrDecodeAll() || asrLastText;
+    asrBufs = [];
+    asrSamples = 0;
     if (!text) return { text: '', intent: 'chat', action: 'none' };
     const p = await polishAsr(text);
     return { raw: text, ...p };
   } catch (err) {
-    asrStream = null;
+    asrBufs = [];
+    asrSamples = 0;
     return { text: asrLastText, intent: 'chat', action: 'none', error: String((err && err.message) || err) };
+  } finally {
+    asrBusy = false;
   }
 });
 
-ipcMain.on('asr-cancel', () => { asrStream = null; asrLastText = ''; });
+ipcMain.on('asr-cancel', () => {
+  asrBufs = [];
+  asrSamples = 0;
+  asrLastText = '';
+  asrBusy = false;
+});
 
 ipcMain.on('voice-command', (_e, action, raw) => {
   switch (action) {

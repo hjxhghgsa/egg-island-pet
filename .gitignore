@@ -4,6 +4,11 @@ dist/
 _*.png
 _model.json
 _asr_test.*
-# 离线 ASR 模型 190MB，接入语音输入前不进仓库 / 不进安装包
+# 离线 ASR 模型（190MB 流式 / 79MB paraformer），不进仓库 / 安装包另配
 models/asr/
+models/asr-para/
+_asr_verify/
+_verify_asr.js
+_tune_asr.js
+_test_para.js
 .DS_Store
