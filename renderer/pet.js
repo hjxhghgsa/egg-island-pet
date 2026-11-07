@@ -1039,7 +1039,7 @@ let tapTimer = null;
 let dblTimer = null;
 let musicTimer = null;
 let comboMode = false;       // 已判定为连击：期间稳住角色、不乱切歌、不误开聊天
-const POUNCE_CYCLE = 3.2;    // 扑一次多久
+const POUNCE_CYCLE = 6.4;    // 一轮 6.4 秒：大部分时间在相互打量，不是一直扑
 let pounceCrouch = 0;        // 蹲伏蓄力 0~1
 let pounceLeap = 0;          // 腾空扑出 0~1
 let lastActSent = null;
@@ -1261,12 +1261,26 @@ function tick() {
     const spd = act === 'chase' ? 2.1 : 0.85;
     const fz = 0.44 + Math.cos(t * spd) * 0.06;
     if (act === 'chase') {
-      // 小蛋待在她右前方；她一扑过去，它往上飘一截躲开，扑空才有戏
-      const dodge = pounceLeap * 0.26;
-      fairy.position.set(0.30 - dodge * 0.35, 0.52 + dodge + Math.sin(t * 3.2) * 0.035, 0.26);
+      // 小蛋要有「参与感」：先主动凑近逗她，她蹲下时后退半步，
+      // 一扑过来就往上窜开，落定后再慢慢飘回去 —— 两个角色才有来回。
+      const u2 = (t % POUNCE_CYCLE) / POUNCE_CYCLE;
+      const approach = u2 < 0.30
+        ? 0.46 - (u2 / 0.30) * 0.14                    // 一点点靠近
+        : (u2 < 0.42 ? 0.32 + pounceCrouch * 0.06       // 她蹲下，它退半步
+          : 0.38 + pounceLeap * 0.22);                  // 扑过来 → 窜开
+      const back = u2 > 0.56 ? (u2 - 0.56) / 0.44 * 0.1 : 0;   // 之后慢慢飘回来
+      const dodge = pounceLeap * 0.3;
+      fairy.position.set(
+        approach - back,
+        0.52 + dodge + Math.sin(t * 2.4) * 0.03,
+        0.26 + Math.sin(t * 1.7) * 0.02
+      );
+      // 被扑的时候原地转一圈，像在得意
+      fairy.rotation.y = pounceLeap * 1.6 + Math.sin(t * 1.3) * 0.1;
     } else {
       // 平时飘在身侧，别趴在头顶挡脸
       fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
+      fairy.rotation.y += (0 - fairy.rotation.y) * Math.min(1, dt * 4);
     }
     fairyGlow.material.opacity = 0.05;
     if (eggRoot) {
@@ -1325,8 +1339,9 @@ function tick() {
   if (act === 'chase') {
     walkX += (0 - walkX) * Math.min(1, dt * 6);
     const u = (t % POUNCE_CYCLE) / POUNCE_CYCLE;
-    pounceCrouch = u < 0.34 ? Math.sin((u / 0.34) * Math.PI) : 0;
-    pounceLeap = (u >= 0.34 && u < 0.64) ? Math.sin(((u - 0.34) / 0.30) * Math.PI) : 0;
+    // 0 ~ .30 打量   .30 ~ .40 蹲下   .40 ~ .55 扑  .55 ~ 1 收势、互看
+    pounceCrouch = (u >= 0.30 && u < 0.42) ? Math.sin(((u - 0.30) / 0.12) * Math.PI) : 0;
+    pounceLeap = (u >= 0.42 && u < 0.56) ? Math.sin(((u - 0.42) / 0.14) * Math.PI) : 0;
     // 蹲下去那一下在脚边压出一圈尘
     if (pounceCrouch > 0.92 && pounceCrouch - dt * 6 < 0.92) {
       sparks.burst({ x: 0, y: 0.10, z: 0.06 }, {
@@ -1420,8 +1435,8 @@ function tick() {
     : ((act === 'sit' || act === 'sleep') ? -0.13 * sitBlend : 0);
 
   spinner.position.y = baseY + bob + jumpY + floatLift + seatDrop
-    - pounceCrouch * 0.055 + pounceLeap * 0.14;
-  const pounceZ = pounceLeap * 0.14 - pounceCrouch * 0.03;
+    - pounceCrouch * 0.04 + pounceLeap * 0.10;
+  const pounceZ = pounceLeap * 0.10 - pounceCrouch * 0.02;
   // 坐上去时身体微微往前，落在板前沿，而不是被板子从腰里穿过
   const wantZ = act === 'swing' ? -0.01 * sitBlend : pounceZ;
   spinner.position.z += (wantZ - spinner.position.z) * Math.min(1, dt * 5);
@@ -1435,8 +1450,8 @@ function tick() {
      之前「老在转」有两个原因：静置时叠了 ±0.16 的 idleSway 左右摇，
      加上追小精灵时整个人转 ±0.55 —— 现在都收掉，默认永远朝前。 */
   if (act === 'chase') {
-    // 小蛋在右前方，她稍微侧身朝它
-    yaw += (0.26 - yaw) * Math.min(1, dt * 5);
+    // 只侧一点点（0.12rad ≈ 7°），主要靠转头去看它 —— 整个身体转过去就不优雅了
+    yaw += (0.12 - yaw) * Math.min(1, dt * 5);
     yawVel = 0;
     lastRotateAt = now;
   } else if (act === 'spin') {
@@ -1500,8 +1515,15 @@ function tick() {
         pitchBone(rig, leg.foot, ((onSwing ? -0.08 : -0.06) + kick * 0.18 + side * 0.01) * sitBlend);
       }
     }
+    // 追小蛋时，头盯着小蛋看（这时不跟鼠标，否则两套朝向打架）
+    if (act === 'chase') {
+      const toElf = Math.max(-0.45, Math.min(0.45, fairy.position.x * 1.2));
+      pitchBone(rig, rig.head, toElf, 'y');
+      pitchBone(rig, rig.chest, toElf * 0.25, 'y');
+    }
+
     // 视线跟随：头先转，身体跟一点点。拖动旋转时不要抢，保持用户控制
-    if (!dragging && act !== 'spin') {
+    if (!dragging && act !== 'spin' && act !== 'chase') {
       const hy = Math.max(-0.42, Math.min(0.42, gazeX * 0.42));
       const hp = Math.max(-0.26, Math.min(0.26, gazeY * 0.26));
       pitchBone(rig, rig.head, hy, 'y');
