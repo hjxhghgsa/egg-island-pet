@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('pet', {
   closeChat: () => ipcRenderer.send('close-chat'),
   chat: (messages) => ipcRenderer.invoke('chat', messages),
   captureScreen: () => ipcRenderer.invoke('capture-screen'),
+  listMusic: () => ipcRenderer.invoke('list-music'),
+  noMusic: () => ipcRenderer.send('no-music'),
+  onToggleMusic: (cb) => ipcRenderer.on('toggle-music', () => cb()),
+  onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
   onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k))
 });

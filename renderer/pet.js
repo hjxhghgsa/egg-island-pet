@@ -273,12 +273,52 @@ window.addEventListener('keydown', (ev) => {
   }
 });
 
+/* ---------------- 音乐 ---------------- */
+const audio = new Audio();
+audio.volume = 0.55;
+let tracks = [];
+let trackIdx = 0;
+
+audio.addEventListener('playing', () => { window.__pet.music = 'playing:' + (tracks[trackIdx] || ''); });
+audio.addEventListener('pause', () => { window.__pet.music = 'paused'; });
+audio.addEventListener('error', () => { window.__pet.music = 'error'; });
+
+audio.addEventListener('ended', () => {
+  if (!tracks.length) return;
+  trackIdx = (trackIdx + 1) % tracks.length;
+  audio.src = tracks[trackIdx];
+  audio.play().catch(() => {});
+});
+
+async function toggleMusic() {
+  if (!tracks.length) {
+    tracks = (await window.pet?.listMusic()) || [];
+    if (!tracks.length) {
+      window.pet?.noMusic();
+      return false;
+    }
+  }
+  if (!audio.paused) {
+    audio.pause();
+    return false;
+  }
+  if (!audio.src) audio.src = tracks[trackIdx];
+  try { await audio.play(); return true; } catch { return false; }
+}
+
+function nextTrack() {
+  if (!tracks.length) return;
+  trackIdx = (trackIdx + 1) % tracks.length;
+  audio.src = tracks[trackIdx];
+  audio.play().catch(() => {});
+}
+
 /* ---------------- 动作 ---------------- */
 let tapCount = 0;
 let lastTapAt = 0;
 
 function tap() {
-  // 双击打开聊天，单击跳一下
+  // 双击打开聊天，单击放歌
   const now = Date.now();
   if (now - lastTapAt < 330) {
     lastTapAt = 0;
@@ -287,7 +327,8 @@ function tap() {
   }
   lastTapAt = now;
 
-  jumpVel = 2.4 + Math.min(tapCount, 4) * 0.35;
+  toggleMusic();
+  jumpVel = 2.2 + Math.min(tapCount, 3) * 0.25;
   tapCount++;
   clearTimeout(tapTimer);
   tapTimer = setTimeout(() => { tapCount = 0; }, 1200);
@@ -406,3 +447,6 @@ window.pet?.onApplySettings((s) => {
 window.pet?.onSwitchModel((k) => {
   if (MODELS[k] && k !== currentKey) loadModel(k);
 });
+
+window.pet?.onToggleMusic(() => { toggleMusic(); });
+window.pet?.onNextTrack(() => { nextTrack(); });

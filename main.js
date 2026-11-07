@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -7,6 +7,9 @@ const https = require('https');
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // Chromium 默认禁止 file:// 页面加载 ES module，桌面应用需要放开
 app.commandLine.appendSwitch('allow-file-access-from-files');
+
+// 开发跑和打包跑的用户目录统一，歌单/设置才能共用
+app.setPath('userData', path.join(app.getPath('appData'), 'EggIslandPet'));
 
 // three.module.js 只是个入口，真正的实现在同目录的 three.core.js。
 // 缺了就补一次，之后走本地，永久离线。
@@ -160,6 +163,16 @@ app.whenReady().then(async () => {
 
   // 调试：PET_SHOT=<路径> 时抓一张桌面合成图后退出
   if (process.env.PET_CHAT) setTimeout(() => openChat(), 3500);
+  if (process.env.PET_MUSIC) {
+    setTimeout(async () => {
+      try {
+        const r = await win.webContents.executeJavaScript(
+          `window.pet.listMusic().then(t => JSON.stringify({count: t.length, names: t}))`
+        );
+        console.log('[music-test]', r);
+      } catch (e) { console.error('[music-test fail]', e.message); }
+    }, 5000);
+  }
   if (process.env.PET_TEST) {
     setTimeout(async () => {
       try {
@@ -295,9 +308,46 @@ function openChat() {
 ipcMain.on('open-chat', openChat);
 ipcMain.on('close-chat', () => { if (chatWin) chatWin.close(); });
 
+// 歌单为空时用托盘气泡提醒一次
+let musicHinted = false;
+ipcMain.on('no-music', () => {
+  if (musicHinted || !tray) return;
+  musicHinted = true;
+  try {
+    tray.displayBalloon({
+      title: '还没有歌',
+      content: '把 mp3 放进 pet\\assets\\music 文件夹，点她就会播。'
+    });
+  } catch {}
+});
+
+// 歌放这里。打包成 exe 后项目目录只读，所以放用户数据区
+const musicDir = () => path.join(app.getPath('userData'), 'music');
+function ensureMusicDir() {
+  try { fs.mkdirSync(musicDir(), { recursive: true }); } catch {}
+}
+
+// 列出音乐目录里的音频，点宠物时循环播放
+ipcMain.handle('list-music', () => {
+  ensureMusicDir();
+  try {
+    const { pathToFileURL } = require('url');
+    return fs.readdirSync(musicDir())
+      .filter((f) => /\.(mp3|m4a|wav|ogg|flac)$/i.test(f))
+      .sort()
+      .map((f) => pathToFileURL(path.join(musicDir(), f)).href);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.on('open-music-folder', () => {
+  ensureMusicDir();
+  shell.openPath(musicDir());
+});
+
 // 截当前屏幕，返回 base64，供视觉模型看
-ipcMain.handle('capture-screen', async () => {
-  const sources = await desktopCapturer.getSources({
+ipcMain.handle('capture-screen', async () => {  const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width: 1280, height: 800 }
   });
@@ -339,6 +389,12 @@ ipcMain.on('context-menu', () => {
   const cur = readSettings().model || 'cake';
   const menu = Menu.buildFromTemplate([
     { label: '和她说话', click: openChat },
+    {
+      label: '放首歌 / 停一下',
+      click: () => win && win.webContents.send('toggle-music')
+    },
+    { label: '下一首', click: () => win && win.webContents.send('next-track') },
+    { label: '打开音乐文件夹', click: () => { ensureMusicDir(); shell.openPath(musicDir()); } },
     { type: 'separator' },
     {
       label: '换个角色',
