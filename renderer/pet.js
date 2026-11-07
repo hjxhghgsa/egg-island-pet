@@ -1047,8 +1047,9 @@ let lastActSent = null;
 const CLICK_GAP = 430;        // 两次点击间隔小于它算「连续」
 const COMBO_IDLE = 1200;       // 多久没点就退出连击
 
-// 她是个安静的女孩子：少用感叹号，句子短一点、轻一点
-const TAP_LINES = ['嗯？', '在呢', '轻一点…', '我听着', '怎么啦', '嗯。', '想说什么就说吧', '我在的'];
+// 性格：大胆、直来直去、有点搞笑，但不说废话
+const TAP_LINES = ['嗯？', '再戳试试', '我在想事情', '手不酸？', '有事说事', '陪我待会儿',
+                   '你戳得挺起劲', '想听我唱歌吗'];
 
 // 整十连击各给一套不同的庆祝，不再每档都只是「花开啦」
 const COMBO_TIERS = {
@@ -1579,6 +1580,21 @@ function tick() {
     lastActSent = act;
   }
 
+  // 偶尔摆个造型（爱美、有点小得意）：抬头侧身停两秒，再落回来
+  vanityTimer -= dt;
+  if (vanityTimer <= 0) {
+    vanityTimer = 150 + Math.random() * 180;        // 2.5~5 分钟一次
+    if (!typingHeat && (act === 'idle' || act === 'sit')) {
+      vanity = 1;
+      showBubble(pickOne(['这样好看吗', '今天状态不错', '我练会儿', '摆个姿势']), 2200);
+      sparks.burst({ x: 0, y: 0.95, z: 0.2 }, {
+        n: 4, colors: ['#ffe9f4', '#ffe6a8'], speed: 0.35, up: 1,
+        sizeMin: 4, sizeMax: 8, lifeMin: 0.6, lifeMax: 1.2
+      });
+    }
+  }
+  if (vanity > 0) vanity = Math.max(0, vanity - dt * 0.45);
+
   // 偶尔轻轻哼一句歌 —— 她喜欢唱歌，但不吵你
   humTimer -= dt;
   if (humTimer <= 0) {
@@ -1613,6 +1629,16 @@ function tick() {
         n: 2, colors: ['#fff2c4', '#ffd9ee'], speed: 0.25, up: 0.8,
         sizeMin: 4, sizeMax: 7, lifeMin: 0.5, lifeMax: 0.9
       });
+    }
+  }
+
+  // 摆造型：抬下巴、侧头、胸口微展，两三秒后自己收回去
+  if (vanity > 0.02 && act !== 'chase' && rigReady) {
+    const vr = modelRoot && modelRoot.userData.islandRig;
+    if (vr) {
+      pitchBone(vr, vr.head, -(0.10 * vanity), 'x');
+      pitchBone(vr, vr.head, 0.18 * vanity, 'y');
+      pitchBone(vr, vr.chest, -(0.05 * vanity), 'x');
     }
   }
 
@@ -1745,6 +1771,8 @@ let typingAt = 0;
 let typeHit = 0;                 // 每一次按键的冲击，衰减很快
 let humTimer = 90 + Math.random() * 120;   // 第一次哼歌别太早
 let petalRain = false;
+let vanityTimer = 120 + Math.random() * 120;   // 摆个造型的节奏（2~4 分钟）
+let vanity = 0;
 let rainTimer = 0;
 window.pet?.onToggleRain?.((on) => { petalRain = !!on; });
 
