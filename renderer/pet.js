@@ -227,22 +227,123 @@ function popBits(kind = 'love', n = 9) {
   }
 }
 
-function bloomFlower(xPct = 50, yPct = 82, color) {
+/* 地面花草：先冒草 → 抽茎 → 长叶 → 开花。
+   锚点不是猜的：groundPoint() 把角色脚底投影成屏幕百分比，
+   整株落在脚底略偏下，从脚前面长出来，既不挡脚也不会飘在半空。 */
+const PETAL_PALS = [
+  { p1: '#fff8fc', p2: '#ffb9d6' },   // 白粉
+  { p1: '#fffdf4', p2: '#ffdf9a' },   // 奶黄
+  { p1: '#fbf6ff', p2: '#d2bcf0' },   // 淡紫
+  { p1: '#fffaf6', p2: '#ffb193' },   // 杏色
+  { p1: '#ffffff', p2: '#c6e3ff' },   // 冰蓝
+  { p1: '#fffdfd', p2: '#f7b6c8' }    // 樱粉
+];
+// 别用荧光绿：桌面壁纸一衬就像塑料片。压低饱和度、根部加深更接近真草。
+const GRASS_PALS = [
+  ['#b8cf9b', '#7c9f61', '#41613c'],
+  ['#a9c48d', '#6d9159', '#3a5836'],
+  ['#c3d6a6', '#88a96c', '#4a6b42']
+];
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pickOne = (arr) => arr[(Math.random() * arr.length) | 0];
+
+// 地面锚点不能靠猜百分比：相机高度、窗口 DPI 一变就飘。
+// 直接把「角色脚底」这个世界坐标投影成屏幕百分比，花草永远长在她脚下。
+const _groundV = new THREE.Vector3();
+function groundPoint() {
+  _groundV.set(spinner.position.x, spinner.position.y, spinner.position.z).project(camera);
+  return {
+    x: (_groundV.x * 0.5 + 0.5) * 100,
+    y: (-_groundV.y * 0.5 + 0.5) * 100
+  };
+}
+window.__pet.ground = () => groundPoint();
+window.__pet.probe = () => {
+  const r = canvas.getBoundingClientRect();
+  return {
+    ground: groundPoint(),
+    canvas: { w: Math.round(r.width), h: Math.round(r.height), dpr: window.devicePixelRatio },
+    plants: [...fxLayer.querySelectorAll('.fx-grass')].map((e) => ({ l: e.style.left, t: e.style.top, n: e.children.length }))
+  };
+};
+
+function bloomFlower(xPct = 50, _yPct, opt = {}) {
   if (!fxLayer) return;
+  const pal = pickOne(PETAL_PALS);
+  const grass = pickOne(GRASS_PALS);
+  const s = opt.scale || rnd(0.92, 1.24);
+  const life = opt.life || rnd(3000, 3800);
+  const g = groundPoint();
+  // 锚点落在脚底再往下 5~10%：整株从脚前面长出来，既看得清又压不到脚面
+  const gy = g.y + rnd(5, 10);
+  // 全部收在脚边一簇里（桌面没有地面，散开就像贴纸飘在半空）；
+  // 裙摆很宽，正中间的花会被整块挡住 —— 往两边让开一点，从裙边底下探出来。
+  let nx = g.x + Math.max(-22, Math.min(22, xPct - 50));
+  // 刚好压在脚正前方会挡住脚尖，稍微让开几像素就好
+  if (Math.abs(nx - g.x) < 3) nx = g.x + (nx >= g.x ? 1 : -1) * rnd(3, 8);
+  nx = Math.max(9, Math.min(91, nx));
+
   const el = document.createElement('div');
-  el.className = 'fx-flower';
-  el.style.left = xPct + '%';
-  el.style.top = yPct + '%';
-  el.style.setProperty('--petal', color || PETAL_COLORS[Math.floor(Math.random() * PETAL_COLORS.length)]);
-  el.style.setProperty('--dur', (1.1 + Math.random() * 0.5).toFixed(2) + 's');
-  for (let i = 0; i < 6; i++) {
-    const p = document.createElement('i');
-    p.style.setProperty('--a', (i * 60) + 'deg');
-    el.appendChild(p);
+  el.className = 'fx-grass';
+  el.style.left = nx.toFixed(1) + '%';
+  el.style.top = gy.toFixed(1) + '%';
+  el.style.zIndex = String(1 + ((Math.random() * 6) | 0));
+  el.style.setProperty('--s', s.toFixed(2));
+  el.style.setProperty('--tilt', rnd(-8, 8).toFixed(1) + 'deg');
+  el.style.setProperty('--dur', life.toFixed(0) + 'ms');
+  el.style.setProperty('--stem', (rnd(6, 11) * s).toFixed(1) + 'px');
+  el.style.setProperty('--g1', grass[0]);
+  el.style.setProperty('--g2', grass[1]);
+  el.style.setProperty('--g3', grass[2]);
+  el.style.setProperty('--p1', pal.p1);
+  el.style.setProperty('--p2', pal.p2);
+
+  // 1) 草叶先冒出来
+  const blades = opt.flower === false ? 4 : 3;
+  for (let i = 0; i < blades; i++) {
+    const b = document.createElement('span');
+    b.className = 'blade';
+    b.style.setProperty('--a', rnd(-40, 40).toFixed(0) + 'deg');
+    b.style.setProperty('--h', (rnd(9, 19) * s).toFixed(1) + 'px');
+    b.style.setProperty('--d', (i * 65).toFixed(0) + 'ms');
+    el.appendChild(b);
   }
-  el.appendChild(document.createElement('b'));
+
+  if (opt.flower !== false) {
+    // 2) 抽茎、长叶
+    el.appendChild(Object.assign(document.createElement('span'), { className: 'stem' }));
+    const leaf = document.createElement('span');
+    leaf.className = 'leaf';
+    leaf.style.setProperty('--la', rnd(-52, -16).toFixed(0) + 'deg');
+    el.appendChild(leaf);
+
+    // 3) 开花：外瓣 8 片 + 内瓣 5 片，两层错开才有体积
+    const bud = document.createElement('span');
+    bud.className = 'bud';
+    bud.style.setProperty('--br', rnd(-11, 11).toFixed(0) + 'deg');
+    // 真实小野花基本都是 5 瓣；两层各 5 瓣、错开 36°，才有厚度
+    for (let i = 0; i < 5; i++) {
+      const p = document.createElement('i');
+      p.className = 'petal';
+      p.style.setProperty('--pa', (i * 72 + rnd(-4, 4)).toFixed(1) + 'deg');
+      p.style.setProperty('--pd', (560 + i * 26).toFixed(0) + 'ms');
+      bud.appendChild(p);
+    }
+    for (let i = 0; i < 5; i++) {
+      const p = document.createElement('i');
+      p.className = 'petal in';
+      p.style.setProperty('--pa', (i * 72 + 36 + rnd(-4, 4)).toFixed(1) + 'deg');
+      p.style.setProperty('--pd2', (730 + i * 26).toFixed(0) + 'ms');
+      bud.appendChild(p);
+    }
+    const core = document.createElement('b');
+    core.className = 'core';
+    bud.appendChild(core);
+    el.appendChild(bud);
+  }
+
   fxLayer.appendChild(el);
-  setTimeout(() => el.remove(), 2200);
+  setTimeout(() => el.remove(), life + 300);
 }
 
 function petalFall(n = 5) {
@@ -445,6 +546,7 @@ let bloomTimer = 0;
 let zTimer = 0;
 let walkTimer = 0;
 let walkX = 0;
+let walkStep = 0;
 let waveTimer = 0;
 let starTimer = 0;
 
@@ -681,6 +783,7 @@ window.addEventListener('pointerdown', (ev) => {
     movingWin = true;
     winMoved = false;
     window.pet?.dragStart();
+    startDragPoll();
     return;
   }
   if (ev.button !== 0) return;
@@ -698,6 +801,7 @@ window.addEventListener('pointerdown', (ev) => {
 window.addEventListener('pointerup', (ev) => {
   if (ev.button === 2) {
     movingWin = false;
+    stopDragPoll();
     if (winMoved) window.pet?.dragEnd();
     else window.pet?.contextMenu();
     return;
@@ -712,10 +816,20 @@ window.addEventListener('pointerup', (ev) => {
   if (wasDragging && !spun) tap();
 });
 
-// 拖窗口时指针事件稀疏，补一个定时推送
-setInterval(() => {
-  if (movingWin && winMoved) window.pet?.dragMove();
-}, 16);
+// 拖窗口时指针事件稀疏，补一个定时推送。
+// 只在右键拖动期间存在，不再留一个 16ms 的常驻定时器空转。
+let dragPoll = null;
+function startDragPoll() {
+  if (dragPoll) return;
+  dragPoll = setInterval(() => {
+    if (movingWin && winMoved) window.pet?.dragMove();
+  }, 16);
+}
+function stopDragPoll() {
+  if (dragPoll) { clearInterval(dragPoll); dragPoll = null; }
+}
+// 右键拖出小窗口后指针事件会断，松开时可能收不到 pointerup；兜底清掉轮询
+window.addEventListener('pointercancel', () => { movingWin = false; stopDragPoll(); });
 
 window.addEventListener('pointerleave', () => { if (!dragging && !movingWin) setHover(false); });
 
@@ -881,10 +995,41 @@ resize();
 /* ---------------- 主循环 ---------------- */
 const GRAVITY = 11.0;
 let prev = performance.now();
+let paused = false;
+let rafId = 0;
+let lastFrameAt = 0;
+
+// 静止节目降到 30fps，动起来（秋千 / 转圈 / 散步 / 撒花）才跑满 60fps；
+// 窗口被收起时则彻底停掉，一帧 WebGL 都不画。
+const CALM_ACTS = new Set(['idle', 'sit', 'sleep']);
+
+function pausePet() {
+  if (paused) return;
+  paused = true;
+  if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+  stopDragPoll();
+  // CSS 特效节点即使窗口藏了也还在跑动画，全部清掉
+  if (fxLayer) fxLayer.replaceChildren();
+  if (bubbleEl) bubbleEl.classList.remove('show');
+  clearTimeout(bubbleTimer);
+}
+
+function resumePet() {
+  if (!paused) return;
+  paused = false;
+  prev = performance.now();   // 别把隐藏的这段时间算成一帧，人物会瞬移
+  lastFrameAt = 0;
+  if (!rafId) rafId = requestAnimationFrame(tick);
+}
 
 function tick() {
-  requestAnimationFrame(tick);
+  if (paused) return;
+  rafId = requestAnimationFrame(tick);
   const now = performance.now();
+  const minGap = CALM_ACTS.has(act) ? 1000 / 30 : 1000 / 60;
+  if (lastFrameAt && now - lastFrameAt < minGap - 1) return;
+  lastFrameAt = now;
+  window.__pet.frames++;          // 调试用：藏起来后这个数应该不再涨
   let dt = (now - prev) / 1000;
   prev = now;
   dt = Math.min(dt, 0.05);
@@ -961,11 +1106,21 @@ function tick() {
     walkTimer -= dt;
     walkX = Math.sin(t * 0.75) * 0.26;
     if (walkTimer <= 0) {
-      bloomFlower(50 + walkX * 60, 82);
-      walkTimer = 0.42 + Math.random() * 0.18;
+      // 落一步就在脚边冒一撮草、开一朵花 —— 一路踩出来的野花才自然
+      const fx0 = 50 + walkX * 56;
+      bloomFlower(fx0 + rnd(-3.5, 3.5), 0, { flower: true, scale: rnd(0.95, 1.2) });
+      // 脚边再补一撮纯草，不然「每一步都只蹦一朵花」还是像撒贴纸
+      if (Math.random() < 0.7) {
+        bloomFlower(fx0 + rnd(-15, 15), 0, {
+          flower: false, scale: rnd(0.8, 1.05), life: rnd(2400, 3200)
+        });
+      }
+      walkStep++;
+      walkTimer = 0.52 + Math.random() * 0.16;
     }
   } else {
     walkX += (0 - walkX) * Math.min(1, dt * 4);
+    walkStep = 0;
   }
   holder.position.x = walkX;
 
@@ -973,8 +1128,8 @@ function tick() {
   if (act === 'bloom') {
     bloomTimer -= dt;
     if (bloomTimer <= 0) {
-      bloomFlower(16 + Math.random() * 68, 60 + Math.random() * 26);
-      bloomTimer = 0.28 + Math.random() * 0.22;
+      bloomFlower(rnd(12, 88), 0, { scale: rnd(0.85, 1.2) });
+      bloomTimer = 0.34 + Math.random() * 0.24;
       if (Math.random() < 0.35) petalFall(2);
     }
   }
@@ -1103,6 +1258,25 @@ async function loadEgg() {
   eggRoot = g;
   window.__pet.egg = 'ready';
 }
+
+/* ---------------- 前台 / 后台休眠 ---------------- */
+window.pet?.onPause?.(pausePet);
+window.pet?.onResume?.(resumePet);
+// 双保险：Electron 的窗口隐藏会让 document.hidden 变成 true，
+// 就算 IPC 比页面加载早到了，Chromium 自己也会把渲染停下来。
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pausePet();
+  else resumePet();
+});
+if (document.hidden) pausePet();
+// 竞态兜底：如果隐藏发生在页面脚本跑起来之前，pet-pause 这条 IPC 会丢，
+// 加载完再按当前真实可见状态校准一次。
+setTimeout(() => {
+  if (document.hidden) pausePet();
+  else resumePet();
+}, 600);
+window.__pet.paused = () => paused;
+window.__pet.frames = 0;
 
 /* ---------------- 启动 ---------------- */
 (async () => {

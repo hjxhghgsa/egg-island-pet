@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('pet', {
   onToggleMusic: (cb) => ipcRenderer.on('toggle-music', () => cb()),
   onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),
   onSummon: (cb) => ipcRenderer.on('summon', () => cb()),
+  // 窗口被收起时让 3D 渲染整体休眠，别在后台空转
+  onPause: (cb) => ipcRenderer.on('pet-pause', () => cb()),
+  onResume: (cb) => ipcRenderer.on('pet-resume', () => cb()),
   touch: () => ipcRenderer.send('user-touch'),
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
   onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k)),

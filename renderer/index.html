@@ -11,8 +11,12 @@
     -webkit-user-select: none; user-select: none;
     cursor: default;
   }
-  #stage { width: 100%; height: 100%; display: block; }
+  /* 层级：#stage(1) → #fx(2) → #bubble(3)。
+     花草挂在前景层，但锚点落在脚底略偏下（见 pet.js 的 groundPoint），
+     所以是「长在她脚前面的地上」，看得见，也不会盖住脚。 */
+  #stage { position: relative; z-index: 1; width: 100%; height: 100%; display: block; }
   #err {
+    z-index: 9;
     position: fixed; inset: 0; display: none; padding: 14px;
     font: 11px/1.5 "Microsoft YaHei", monospace;
     color: #7a3020; background: rgba(255,246,240,.96);
@@ -20,10 +24,9 @@
   }
   #err.show { display: block; }
 
-  /* ---------- 特效层：纯 DOM，透明窗口里比 WebGL 精灵更醒目 ----------
-     参考 React Bits 的 ClickSpark / Magic Rings / Particles，用原生 CSS 复刻：
-     发光星尘从一点放射、花开带一圈扩散光环、花瓣本身是渐变而不是文字符号。 */
-  #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  /* ---------- 前景特效层：纯 DOM，透明窗口里比 WebGL 精灵更醒目 ----------
+     参考 React Bits 的 ClickSpark / Particles，用原生 CSS 复刻。 */
+  #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
 
   /* 星尘：柔光核心 + 十字星芒 + 放射拖尾 */
   /* 透明 Electron 窗口里 clip-path / filter / mix-blend-mode 都会被 alpha 合成吃掉，
@@ -64,50 +67,117 @@
     100% { transform: translate(var(--dx), var(--dy)) scale(1.12) rotate(var(--rot)); opacity: 0; }
   }
 
-  /* 花开：渐变花瓣 + 一圈向外扩散的柔光环 + 星点花蕊 */
-  .fx-flower {
+  /* ---------- 地面花草：一株 = 草叶 + 花茎 + 叶 + 外瓣 + 内瓣 + 花心 ----------
+     生长顺序：0ms 冒草 → 180ms 抽茎 → 420ms 长叶 → 600ms 外瓣开 → 760ms 内瓣
+     → 1000ms 花心 → 2.6~3.6s 整株淡出。
+     花瓣是椭圆渐变、两层错开角度，不是六片正圆贴纸，所以才有体积感。 */
+  .fx-grass {
     position: absolute; width: 0; height: 0;
-    animation: fxBloom var(--dur) cubic-bezier(.22,1,.36,1) forwards;
+    transform-origin: 0 0;
+    scale: var(--s, 1);
+    rotate: var(--tilt, 0deg);
+    animation: grassLife var(--dur, 3000ms) ease-out forwards;
   }
-  .fx-flower::before {
-    content: ''; position: absolute; left: -15px; top: -15px;
-    width: 30px; height: 30px; border-radius: 50%;
-    border: 1.5px solid var(--petal);
-    box-shadow: 0 0 14px var(--petal), inset 0 0 10px var(--petal);
-    animation: ringPulse var(--dur) cubic-bezier(.22,1,.36,1) forwards;
-  }
-  @keyframes ringPulse {
-    0%   { transform: scale(.15); opacity: 0; }
-    22%  { opacity: .8; }
-    100% { transform: scale(1.9); opacity: 0; }
-  }
-  .fx-flower i {
-    position: absolute; left: -5px; top: -13px; width: 10px; height: 16px;
-    border-radius: 62% 62% 48% 48% / 80% 80% 30% 30%;
-    background: linear-gradient(180deg, #fff 0%, var(--petal) 55%, var(--petal) 100%);
-    box-shadow: 0 0 9px var(--petal), inset 0 2px 3px rgba(255,255,255,.9);
-    transform-origin: 50% 13px;
-    animation: petalOpen var(--dur) cubic-bezier(.22,1,.36,1) forwards;
-  }
-  .fx-flower b {
-    position: absolute; left: -3px; top: -3px; width: 6px; height: 6px;
-    border-radius: 50%; background: #fffaf0;
-    box-shadow: 0 0 8px 2px #ffe9a8, 0 0 16px 4px #ffd76e;
-    animation: corePop var(--dur) cubic-bezier(.22,1,.36,1) forwards;
-  }
-  @keyframes petalOpen {
-    0%   { transform: rotate(var(--a)) translateY(0) scale(.05); opacity: 0; }
-    30%  { transform: rotate(var(--a)) translateY(-10px) scale(1); opacity: 1; }
-    74%  { opacity: 1; }
-    100% { transform: rotate(var(--a)) translateY(-12px) scale(.86); opacity: 0; }
-  }
-  @keyframes corePop {
-    0%   { transform: scale(.1); opacity: 0; }
-    28%  { transform: scale(1); opacity: 1; }
-    74%  { opacity: 1; }
+  @keyframes grassLife {
+    0% { opacity: 0; }
+    9% { opacity: 1; }
+    74% { opacity: 1; }
     100% { opacity: 0; }
   }
-  @keyframes fxBloom { 0% { opacity: 0; } 16% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
+
+  /* 草叶：贴着地面抽出来，长成后轻轻摆 */
+  .fx-grass .blade {
+    position: absolute; left: 0; bottom: 0;
+    width: 1.8px; height: var(--h, 18px);
+    margin-left: -0.9px;
+    border-radius: 55% 55% 12% 12% / 92% 92% 0 0;
+    background: linear-gradient(180deg, var(--g1, #b6dc8e) 0%, var(--g2, #6fae55) 58%, var(--g3, #3f7c3a) 100%);
+    opacity: .94;
+    transform-origin: 50% 100%;
+    rotate: var(--a, 0deg);
+    scale: 1 0;
+    animation:
+      bladeGrow 760ms cubic-bezier(.18,.86,.28,1) var(--d, 0ms) forwards,
+      bladeSway 2400ms ease-in-out calc(var(--d, 0ms) + 760ms) infinite;
+  }
+  @keyframes bladeGrow { 0% { scale: 1 0; } 68% { scale: 1.05 1.07; } 100% { scale: 1 1; } }
+  @keyframes bladeSway {
+    0%, 100% { rotate: calc(var(--a, 0deg) - 2.5deg); }
+    50%      { rotate: calc(var(--a, 0deg) + 2.5deg); }
+  }
+
+  .fx-grass .stem {
+    position: absolute; left: 0; bottom: 0;
+    width: 1.3px; height: var(--stem, 13px);
+    margin-left: -0.65px; border-radius: 1px;
+    background: linear-gradient(180deg, #86b968 0%, #578f45 58%, #3f7034 100%);
+    transform-origin: 50% 100%;
+    scale: 1 0;
+    animation: stemGrow 720ms cubic-bezier(.18,.86,.28,1) 180ms forwards;
+  }
+  @keyframes stemGrow { 0% { scale: 1 0; } 66% { scale: 1 1.04; } 100% { scale: 1 1; } }
+
+  .fx-grass .leaf {
+    position: absolute; left: 0; bottom: calc(var(--stem, 13px) * .42);
+    width: 6px; height: 3.4px;
+    border-radius: 100% 8% 100% 8% / 100% 8% 100% 8%;
+    background: linear-gradient(118deg, #a2d67c 0%, #5e9b48 100%);
+    transform-origin: 0 50%;
+    rotate: var(--la, -34deg);
+    scale: 0;
+    animation: leafOut 460ms cubic-bezier(.2,1.3,.4,1) 420ms forwards;
+  }
+  @keyframes leafOut { to { scale: 1; } }
+
+  .fx-grass .bud {
+    position: absolute; left: 0; bottom: var(--stem, 14px);
+    width: 0; height: 0;
+    rotate: var(--br, 0deg);
+  }
+  /* 外层花瓣：略大、更淡，负责轮廓 */
+  .fx-grass .petal {
+    position: absolute; left: -2.4px; top: -7.4px;
+    width: 4.8px; height: 7.4px;
+    border-radius: 54% 54% 46% 46% / 62% 62% 38% 38%;
+    /* 根部偏白、尖端带色，像真花瓣的透光渐变，不是一整块纯色 */
+    background: linear-gradient(184deg, var(--p2, #ffc2dd) 0%, var(--p1, #fff6fb) 46%, #fffdfa 100%);
+    /* 只用内阴影勾边，不加外发光：外发光会让整朵花糊成一团光斑 */
+    box-shadow: inset 0 0 0 .45px rgba(168,96,128,.22), inset 0 -1px 1.4px rgba(148,78,108,.16);
+    opacity: .97;
+    transform-origin: 50% 100%;
+    rotate: var(--pa, 0deg);
+    translate: 0 -.8px;
+    scale: 1 0;
+    animation: petalOut 560ms cubic-bezier(.16,1.1,.3,1) var(--pd, 600ms) forwards;
+  }
+  @keyframes petalOut {
+    0%   { scale: .15 0; opacity: 0; }
+    55%  { scale: 1.04 1.06; opacity: 1; }
+    100% { scale: 1 1; opacity: 1; }
+  }
+  /* 内层花瓣：小一圈、颜色更沉，压在外瓣中间才不像平面剪贴 */
+  .fx-grass .petal.in {
+    left: -1.8px; top: -5.4px;
+    width: 3.6px; height: 5.4px;
+    background: linear-gradient(184deg, var(--p2, #ffc2dd) 0%, var(--p1, #fff6fb) 82%);
+    opacity: .92;
+    translate: 0 -.3px;
+    animation-delay: var(--pd2, 760ms);
+  }
+  /* 花心：一颗暖色小圆 + 三粒花粉点 */
+  .fx-grass .core {
+    position: absolute; left: -2.9px; top: -2.9px;
+    width: 5.8px; height: 5.8px; border-radius: 50%;
+    background:
+      radial-gradient(circle at 32% 30%, #fff3b0 0 1px, transparent 1.4px),
+      radial-gradient(circle at 66% 42%, #ffe98e 0 .9px, transparent 1.2px),
+      radial-gradient(circle at 44% 70%, #ffdf8a 0 1px, transparent 1.3px),
+      radial-gradient(circle at 36% 32%, #ffe08a 0%, #f5bf4e 58%, #cf8f28 100%);
+    box-shadow: inset 0 .8px 1.2px rgba(255,255,255,.85);
+    scale: 0;
+    animation: coreOut 420ms cubic-bezier(.2,1.5,.4,1) 1000ms forwards;
+  }
+  @keyframes coreOut { to { scale: 1; } }
 
   /* 飘落的花瓣：实体渐变花瓣，不再是 ❀ 字符 */
   .fx-flake {
@@ -124,8 +194,9 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .fx-spark, .fx-bit, .fx-flower, .fx-flower i, .fx-flower b,
-    .fx-flower::before, .fx-flake { animation-duration: 1ms !important; }
+    .fx-spark, .fx-bit, .fx-flake, .fx-grass, .fx-grass .blade,
+    .fx-grass .stem, .fx-grass .leaf, .fx-grass .petal,
+    .fx-grass .core { animation-duration: 1ms !important; }
   }
 
   /* 说话气泡：半透明玻璃 + 柔光 + 指向角色的小尖角 */

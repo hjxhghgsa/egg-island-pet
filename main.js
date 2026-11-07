@@ -3,8 +3,25 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 
-// 透明窗口在 Windows 上的必要开关
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+// 启动耗时排查：PET_TIMING=1 时把各阶段毫秒数写到用户目录，正常启动零开销
+const BOOT_T0 = Date.now();
+function bootLog(label) {
+  if (!process.env.PET_TIMING) return;
+  try {
+    fs.appendFileSync(
+      path.join(app.getPath('userData'), 'boot-timing.log'),
+      new Date().toISOString() + '  +' + String(Date.now() - BOOT_T0).padStart(6) + 'ms  ' + label + '\n'
+    );
+  } catch {}
+}
+
+// 透明窗口在 Windows 上的必要开关；顺手关掉几个纯本地应用用不到的
+// Chromium 后台服务（组件更新 / 翻译 / 投屏 / 优化提示），少起进程、少占内存。
+app.commandLine.appendSwitch('disable-features',
+  'CalculateNativeWinOcclusion,MediaRouter,Translate,OptimizationHints,ComponentUpdater');
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-component-update');
+app.commandLine.appendSwitch('disable-default-apps');
 // Chromium 默认禁止 file:// 页面加载 ES module，桌面应用需要放开
 app.commandLine.appendSwitch('allow-file-access-from-files');
 
@@ -68,8 +85,56 @@ let win = null;
 let tray = null;
 let dragOrigin = null;
 let autoHideTimer = null;
-let userTouched = false;
+let userTouched = false;      // 被主人召唤/摸过，这一轮就不再自动收起
+let petHovered = false;       // 鼠标正停在角色身上
 const SUMMON_KEY = 'Control+Alt+E';
+const HIDE_DELAY = 2500;      // 失焦后等一下再藏，避免误判
+const BOOT_GRACE = 8000;      // 刚启动的 8 秒里绝不自动藏
+
+function autoHideEnabled() { return readSettings().autoHide === true; }
+
+function cancelAutoHide() {
+  if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; }
+}
+
+// 所有显示/隐藏都走这两个入口：顺带通知渲染层休眠 / 唤醒，
+// 免得窗口藏起来后 WebGL 还在 60fps 空转吃显卡和内存。
+function showPet({ focus = false } = {}) {
+  if (!win || win.isDestroyed()) return;
+  if (!win.isVisible()) {
+    win.show();
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.webContents.send('pet-resume');
+  }
+  if (focus) win.focus();
+}
+
+function hidePet() {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  win.webContents.send('pet-pause');
+  win.hide();
+}
+
+// 只有「真的切到别的软件」才考虑收起。
+// 关键：不再有启动后无条件 3 秒定时器 —— 人还在桌面、什么都没点时绝不自己消失。
+function maybeAutoHide() {
+  cancelAutoHide();
+  if (!autoHideEnabled()) return;
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  if (userTouched || petHovered) return;
+  if (Date.now() - BOOT_T0 < BOOT_GRACE) return;
+  if (chatWin && !chatWin.isDestroyed()) return;
+  if (snipWin && !snipWin.isDestroyed()) return;
+  if (peekTimer) return;                    // 正在说话，说完再收
+  autoHideTimer = setTimeout(() => {
+    autoHideTimer = null;
+    if (!win || win.isDestroyed() || !win.isVisible()) return;
+    if (win.isFocused() || userTouched || petHovered) return;
+    if (chatWin && !chatWin.isDestroyed()) return;
+    hidePet();
+    console.log('[autohide] focus moved to another app');
+  }, HIDE_DELAY);
+}
 
 function createWindow() {
   const s = readSettings();
@@ -93,13 +158,16 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     focusable: true,
-    show: false,
+    // 直接建窗，不等 ready-to-show 再 show；透明窗口提前出现也不会闪白
+    show: true,
     icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: false,
+      // 关键：让 Chromium 在窗口隐藏时正常节流后台渲染，
+      // 之前写 false 等于强制桌宠在后台也满帧跑 WebGL。
+      backgroundThrottling: true,
       // 纯本地应用，只加载本机文件；关掉安全检查以便 file:// 下能用 ES module
       webSecurity: false
     }
@@ -124,44 +192,37 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   win.once('ready-to-show', () => {
-    win.show();
-    win.setAlwaysOnTop(true, 'screen-saver');
+    showPet();
     const q = s.quality || 'balanced';
     win.webContents.send('apply-settings', { quality: q, scale: s.scale || 1 });
-
-    // 露个脸就藏起来，等召唤。碰过她就不藏了
-    if (!process.env.PET_KEEP && !process.env.PET_SHOT) {
-      try {
-        tray.displayBalloon({
-          title: '蛋岛宠物在后台',
-          content: '按 Ctrl+Alt+E 召唤她，或者点右下角托盘图标。'
-        });
-      } catch {}
-      autoHideTimer = setTimeout(() => {
-        if (!win || win.isDestroyed() || !win.isVisible()) return;
-        // 正在聊天就不收起来
-        if (chatWin && !chatWin.isDestroyed()) return;
-        win.hide();
-        console.log('[autohide] hidden');
-      }, 3000);
-    }
+    bootLog('ready-to-show / first paint');
+    // 启动后就留在桌面上。不再「开完机 3 秒自己消失」——
+    // 只有主人真的切进别的软件、且在托盘里开了自动隐藏时才收起。
   });
 
-  // 别的窗口抢焦点时会被压下去，这里一直抢回最上层
+  // 别的窗口抢焦点时会被压下去，这里抢回最上层
   const keepTop = () => {
     if (!win || win.isDestroyed() || !win.isVisible()) return;
     win.setAlwaysOnTop(true, 'screen-saver');
   };
-  win.on('blur', () => setTimeout(keepTop, 120));
+  win.on('blur', () => {
+    setTimeout(keepTop, 120);
+    maybeAutoHide();
+  });
+  win.on('focus', () => { cancelAutoHide(); keepTop(); });
   win.on('show', () => setTimeout(keepTop, 120));
-  setInterval(keepTop, 15000);
+  // 兜底从 15s 降到 60s，且窗口藏起来时一次原生调用都不做
+  const topGuard = setInterval(() => {
+    if (win && !win.isDestroyed() && win.isVisible()) win.setAlwaysOnTop(true, 'screen-saver');
+  }, 60000);
+  if (topGuard.unref) topGuard.unref();
 
   win.on('closed', () => { win = null; });
 }
 
 function summon() {
   if (!win || win.isDestroyed()) return createWindow();
-  if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; }
+  cancelAutoHide();
   // 攒着的提醒，召唤时一次性说给主人听
   if (pendingSays.length) {
     const line = pendingSays.splice(0).join('  /  ');
@@ -170,18 +231,13 @@ function summon() {
     }, 450);
   }
   userTouched = true;
-  if (!win.isVisible()) {
-    win.show();
-    win.setAlwaysOnTop(true, 'screen-saver');
-    win.webContents.send('summon');
-  } else {
-    win.focus();
-    win.webContents.send('summon');
-  }
+  showPet({ focus: true });
+  win.webContents.send('summon');
 }
 
 function dismiss() {
-  if (win && !win.isDestroyed()) win.hide();
+  cancelAutoHide();
+  hidePet();
 }
 
 function toggleVisible() {
@@ -202,6 +258,16 @@ function buildTray() {
       type: 'checkbox',
       checked: app.getLoginItemSettings().openAtLogin,
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked })
+    },
+    {
+      // 默认关：人在桌面待着、什么都没点开时，绝不自作主张藏起来
+      label: '切到别的软件时自动隐藏',
+      type: 'checkbox',
+      checked: readSettings().autoHide === true,
+      click: (item) => {
+        writeSettings({ autoHide: item.checked });
+        if (!item.checked) cancelAutoHide();
+      }
     },
     { label: '回到右下角', click: () => {
         const { workArea } = screen.getPrimaryDisplay();
@@ -224,14 +290,23 @@ app.whenReady().then(async () => {
     cb(permission === 'media' || permission === 'audioCapture' || permission === 'microphone');
   });
 
-  const ok = await ensureThreeCore();
-  if (!ok && !fs.existsSync(THREE_CORE)) {
-    dialog.showErrorBox('缺少运行库',
-      '无法下载 three.core.js，请检查网络后重试。\n\n目标路径：\n' + THREE_CORE);
-  }
+  bootLog('app.whenReady');
 
+  // three.core.js 是打包时就带上的本地文件。别为了「确认一下它在不在」
+  // 而 await 一次网络请求——桌面启动不该被任何 I/O 卡住。
+  try {
+    if (!fs.existsSync(THREE_CORE) || fs.statSync(THREE_CORE).size <= 100000) {
+      ensureThreeCore().then((ok) => {
+        if (!ok) dialog.showErrorBox('缺少运行库',
+          '无法下载 three.core.js，请检查网络后重试。\n\n目标路径：\n' + THREE_CORE);
+      });
+    }
+  } catch { /* 缺文件也不阻塞启动，渲染层会给出错误提示 */ }
+
+  buildTray();          // 托盘先就位，再建窗，避免 ready-to-show 时托盘还没建好
+  bootLog('tray ready');
   createWindow();
-  buildTray();
+  bootLog('window created');
 
   // 打包后按设置开机自启（开发模式不自启）
   if (app.isPackaged && readSettings().openAtLogin) {
@@ -457,11 +532,43 @@ app.whenReady().then(async () => {
       } catch (e) { console.error('[chat-e2e fail]', e.message); }
     }, 7000);
   }
+  // 后台休眠自检：PET_PERF=1 自动跑一遍「可见 → 隐藏 → 唤醒」，把帧计数写进文件。
+  // 纯调试开关，正常启动完全不会执行。
+  if (process.env.PET_PERF) {
+    const out = path.join(app.getPath('userData'), '_perf_result.txt');
+    const log = (s) => { try { fs.appendFileSync(out, s + '\n'); } catch {} };
+    try { fs.writeFileSync(out, ''); } catch {}
+    const snap = async (tag) => {
+      const r = await win.webContents.executeJavaScript(
+        'JSON.stringify({f: window.__pet ? window.__pet.frames : -1, h: document.hidden, p: window.__pet ? window.__pet.paused() : null})'
+      );
+      const o = JSON.parse(r);
+      log(tag + '  visible=' + win.isVisible() + '  document.hidden=' + o.h +
+          '  paused=' + o.p + '  frames=' + o.f);
+      return o.f;
+    };
+    setTimeout(async () => {
+      try {
+        await snap('t+2s  启动后');
+        await new Promise((r) => setTimeout(r, 3000));
+        await snap('t+5s  桌面静置（不该自己藏）');
+        hidePet();
+        await new Promise((r) => setTimeout(r, 3000));
+        const b = await snap('t+8s  已隐藏 3 秒');
+        await new Promise((r) => setTimeout(r, 3000));
+        const c = await snap('t+11s 已隐藏 6 秒');
+        showPet();
+        await new Promise((r) => setTimeout(r, 2000));
+        const d = await snap('t+13s 重新召唤');
+        log('结论：隐藏期间新增帧 = ' + (c - b) + '（应为 0）；唤醒后新增帧 = ' + (d - c) + '（应 > 0）');
+      } catch (e) { log('ERR ' + e.message); }
+    }, 2000);
+  }
   if (process.env.PET_SHOT) {
     setTimeout(async () => {
       try {
         const dbg = await win.webContents.executeJavaScript(
-          `JSON.stringify({state: window.__pet, w: innerWidth, h: innerHeight, fx: document.getElementById('fx').children.length, bits: [...document.getElementById('fx').children].slice(0,3).map(e => ({t: e.textContent, o: getComputedStyle(e).opacity, c: e.style.color})), yaw: window.__pet.yaw()})`
+          `JSON.stringify({state: window.__pet, probe: window.__pet.probe ? window.__pet.probe() : null, fx: document.getElementById('fx').children.length, yaw: window.__pet.yaw()})`
         );
         console.log('[debug]', dbg);
         const px = await win.webContents.executeJavaScript(`(() => {
@@ -516,6 +623,8 @@ app.on('will-quit', () => {
 
 // 悬停命中判定：切换鼠标穿透
 ipcMain.on('hover-state', (_e, hovering) => {
+  petHovered = !!hovering;
+  if (petHovered) cancelAutoHide();   // 鼠标还在她身上就别藏
   if (!win) return;
   win.setIgnoreMouseEvents(!hovering, { forward: true });
 });
@@ -573,7 +682,7 @@ function openChat() {
 
   // 聊天时把她收起来，免得两块重叠挡住了别人的窗口
   const petWasVisible = !!(win && win.isVisible());
-  if (petWasVisible) win.hide();
+  if (petWasVisible) hidePet();
 
   chatWin = new BrowserWindow({
     width: W,
@@ -599,10 +708,7 @@ function openChat() {
   chatWin.on('closed', () => {
     chatWin = null;
     // 关掉聊天后把她放回来
-    if (petWasVisible && win && !win.isDestroyed()) {
-      win.show();
-      win.setAlwaysOnTop(true, 'screen-saver');
-    }
+    if (petWasVisible && win && !win.isDestroyed()) showPet();
   });
 }
 
@@ -612,7 +718,7 @@ ipcMain.on('close-chat', () => { if (chatWin) chatWin.close(); });
 // 用户碰过她，就不再自动隐身
 ipcMain.on('user-touch', () => {
   userTouched = true;
-  if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; }
+  cancelAutoHide();
 });
 ipcMain.on('dismiss', dismiss);
 
@@ -963,7 +1069,7 @@ ipcMain.on('voice-command', (_e, action, raw) => {
     case 'pomodoro': startPomodoro(); break;
     case 'music': if (win) win.webContents.send('toggle-music'); break;
     case 'act': if (win) win.webContents.send('next-act'); break;
-    case 'hide': if (win) win.hide(); break;
+    case 'hide': dismiss(); break;
     default: break;
   }
   asrEmit('asr-command-done', { action, raw });
@@ -994,16 +1100,14 @@ function petSay(text) {
     return;
   }
   const wasHidden = !win.isVisible();
-  if (wasHidden) {
-    win.show();
-    win.setAlwaysOnTop(true, 'screen-saver');
-  }
+  if (wasHidden) showPet();
   // 只用角色身上的半透明气泡说话，不弹系统通知
   win.webContents.send('pet-say', { text });
   if (wasHidden) {
     clearTimeout(peekTimer);
     peekTimer = setTimeout(() => {
-      if (win && !win.isDestroyed() && !win.isFocused()) win.hide();
+      peekTimer = null;
+      if (win && !win.isDestroyed() && !win.isFocused() && !petHovered && !userTouched) hidePet();
     }, 5600);
   }
 }
@@ -1166,7 +1270,7 @@ ipcMain.on('context-menu', () => {
         writeSettings({ x: win.getBounds().x, y: win.getBounds().y });
       } },
     { type: 'separator' },
-    { label: '隐藏（托盘可恢复）', click: () => win.hide() },
+    { label: '隐藏（托盘可恢复）', click: () => dismiss() },
     { label: '退出', click: () => { app.isQuitting = true; app.quit(); } }
   ]);
   menu.popup({ window: win });
