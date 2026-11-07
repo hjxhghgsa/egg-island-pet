@@ -39,7 +39,7 @@ const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
 
 // 相机按模型高度自适应，人物和宠物都能占满画面约 3/4
 function frameCamera(height) {
-  camera.position.set(0, height * 0.6, height * 2.3);
+  camera.position.set(0, height * 0.58, height * 1.98);   // 拉近一点，让她把画面撑满
   camera.lookAt(0, height * 0.5, 0);
   camera.updateProjectionMatrix();
 }
@@ -138,7 +138,7 @@ const fairyGlow = new THREE.Sprite(new THREE.SpriteMaterial({
   transparent: true, depthWrite: false, depthTest: false,
   toneMapped: false
 }));
-fairyGlow.scale.setScalar(0.34);
+fairyGlow.scale.setScalar(0.17);   // 0.34 时像在它背后挂了张粉色光盘
 fairyGlow.renderOrder = 1;
 fairy.add(fairyGlow);
 
@@ -173,11 +173,11 @@ const X_AXIS = new THREE.Vector3(1, 0, 0);
 // 骨骼俯仰必须绕「骨骼自己的局部 X 轴」，和 animation.js 的 rotate() 完全一致。
 // 之前直接拿世界 (1,0,0) 硬乘 quaternion：Mixamo 大腿/手臂初始朝向各不相同，
 // 于是腿被拧成 Z 字、脚尖朝天、手指整排翻起来 —— 这就是坐姿和手难看的根因。
-function pitchBone(rig, bone, angle) {
+function pitchBone(rig, bone, angle, axis = 'x') {
   if (!rig || !bone || Math.abs(angle) < 1e-6) return;
   const data = rig.joints.get(bone);
-  if (!data) return;
-  bone.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(data.x, angle));
+  if (!data || !data[axis]) return;
+  bone.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(data[axis], angle));
 }
 
 const BIT_SETS = {
@@ -848,7 +848,7 @@ window.addEventListener('contextmenu', (ev) => ev.preventDefault());
 const ACT_LABELS = {
   idle: '站着发呆', sit: '坐一会儿', swing: '荡秋千', spin: '转个圈',
   hop: '蹦蹦跳', walk: '散步开花', bloom: '满地开花', wave: '挥手打招呼',
-  float: '飘起来', chase: '追小精灵', sleep: '打瞌睡'
+  float: '飘起来', chase: '扑小蛋', sleep: '打瞌睡'
 };
 
 // 右键菜单也能翻节目 / 开关小精灵
@@ -935,6 +935,9 @@ let dblTimer = null;
 let musicTimer = null;
 let comboMode = false;       // 已判定为连击：期间稳住角色、不乱切歌、不误开聊天
 let patrolDir = 0;           // 窗口巡逻方向：0=原地，±1=往左右跑
+const POUNCE_CYCLE = 3.2;    // 扑一次多久
+let pounceCrouch = 0;        // 蹲伏蓄力 0~1
+let pounceLeap = 0;          // 腾空扑出 0~1
 let lastActSent = null;
 
 const CLICK_GAP = 430;        // 两次点击间隔小于它算「连续」
@@ -1021,6 +1024,14 @@ window.addEventListener('dblclick', (ev) => {
 });
 
 window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
+window.__pet.modelInfo = () => {
+  if (!modelRoot) return 'no model';
+  const b = new THREE.Box3().setFromObject(modelRoot);
+  const sz = b.getSize(new THREE.Vector3());
+  return JSON.stringify({ key: currentKey, w: +sz.x.toFixed(3), h: +sz.y.toFixed(3), d: +sz.z.toFixed(3),
+    top: +b.max.y.toFixed(3), bottom: +b.min.y.toFixed(3) });
+};
+
 window.__pet.rigInfo = () => {
   const r = modelRoot && modelRoot.userData.islandRig;
   if (!r) return 'no rig';
@@ -1138,11 +1149,9 @@ function tick() {
     const spd = act === 'chase' ? 2.1 : 0.85;
     const fz = 0.44 + Math.cos(t * spd) * 0.06;
     if (act === 'chase') {
-      // 追跑时小精灵要「在前面领跑」，忽远忽近；之前它一直贴在她身侧，
-      // 看着就是「抱着宠物原地平移」，根本看不出谁追谁。
-      const dir = patrolDir || (Math.cos(t * 1.15) >= 0 ? 1 : -1);
-      const lead = 0.30 + 0.11 * Math.sin(t * 2.4);
-      fairy.position.set(dir * lead, 0.60 + Math.sin(t * 3.4) * 0.05, 0.10);
+      // 小蛋待在她右前方；她一扑过去，它往上飘一截躲开，扑空才有戏
+      const dodge = pounceLeap * 0.26;
+      fairy.position.set(0.30 - dodge * 0.35, 0.52 + dodge + Math.sin(t * 3.2) * 0.035, 0.26);
     } else {
       // 平时飘在身侧，别趴在头顶挡脸
       fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
@@ -1200,19 +1209,24 @@ function tick() {
     spinner.position.x += (0 - spinner.position.x) * Math.min(1, dt * 5);
   }
 
-  // 散步：左右走，脚下每落一步就开一朵花
-  // 追小精灵：真的跑起来，横跨整个窗口追，而不是站在原地转身
+  // 扑小蛋：蹲伏蓄力 → 弹出去双手抓 → 抓空落地 → 再来一次
   if (act === 'chase') {
-    // 窗口已经在屏幕上跑，人物在窗口内只做小幅晃动，否则会跑出窗口
-    walkX = Math.sin(t * 1.15) * (patrolDir ? 0.10 : 0.55);
-    walkTimer -= dt;
-    if (walkTimer <= 0) {
-      walkTimer = 0.30;
-      // 跑过的地方留一串向后甩的星尘
-      sparks.burst({ x: walkX, y: 0.18, z: 0.05 }, {
-        n: 4, colors: ['#ffe48c', '#fff6cf', '#ffbade'], speed: 0.35,
-        dir: { x: -Math.sign(Math.cos(t * 1.15)) * 0.7, y: 0.25, z: 0 },
-        up: 0.7, sizeMin: 5, sizeMax: 10, lifeMin: 0.35, lifeMax: 0.75
+    walkX += (0 - walkX) * Math.min(1, dt * 6);
+    const u = (t % POUNCE_CYCLE) / POUNCE_CYCLE;
+    pounceCrouch = u < 0.34 ? Math.sin((u / 0.34) * Math.PI) : 0;
+    pounceLeap = (u >= 0.34 && u < 0.64) ? Math.sin(((u - 0.34) / 0.30) * Math.PI) : 0;
+    // 蹲下去那一下在脚边压出一圈尘
+    if (pounceCrouch > 0.92 && pounceCrouch - dt * 6 < 0.92) {
+      sparks.burst({ x: 0, y: 0.10, z: 0.06 }, {
+        n: 7, colors: ['#fff2c4', '#ffd9c0', '#d8d2ff'], speed: 0.4,
+        up: 0.2, sizeMin: 4, sizeMax: 9, lifeMin: 0.3, lifeMax: 0.6
+      });
+    }
+    // 扑到最高点时撒一把星
+    if (pounceLeap > 0.95 && pounceLeap - dt * 8 < 0.95) {
+      sparks.burst({ x: 0.16, y: 0.55, z: 0.26 }, {
+        n: 10, colors: ['#ffe48c', '#fff6cf', '#ffbade'], speed: 1.1,
+        up: 0.5, sizeMin: 5, sizeMax: 11, lifeMin: 0.3, lifeMax: 0.7
       });
     }
   } else if (act === 'walk') {
@@ -1281,9 +1295,11 @@ function tick() {
   const seatDrop = act === 'swing' ? 0.005 * sitBlend
     : ((act === 'sit' || act === 'sleep') ? -0.13 * sitBlend : 0);
 
-  spinner.position.y = baseY + bob + jumpY + floatLift + seatDrop;
+  spinner.position.y = baseY + bob + jumpY + floatLift + seatDrop
+    - pounceCrouch * 0.055 + pounceLeap * 0.14;
+  const pounceZ = pounceLeap * 0.14 - pounceCrouch * 0.03;
   // 坐上去时身体微微往前，落在板前沿，而不是被板子从腰里穿过
-  const wantZ = act === 'swing' ? -0.01 * sitBlend : 0;
+  const wantZ = act === 'swing' ? -0.01 * sitBlend : pounceZ;
   spinner.position.z += (wantZ - spinner.position.z) * Math.min(1, dt * 5);
   spinner.scale.set(
     1 + (1 - squash) * 0.55,
@@ -1295,10 +1311,8 @@ function tick() {
      之前「老在转」有两个原因：静置时叠了 ±0.16 的 idleSway 左右摇，
      加上追小精灵时整个人转 ±0.55 —— 现在都收掉，默认永远朝前。 */
   if (act === 'chase') {
-    // 巡逻时朝跑动方向侧身（0.8rad ≈ 45°，看着像在往前跑而不是横着飘）
-    // 正号才是朝跑动方向：之前写成 -0.8，结果她背对着小精灵「倒着跑」
-    const wantYaw = patrolDir ? patrolDir * 0.8 : Math.sin(t * 2.1) * 0.16;
-    yaw += (wantYaw - yaw) * Math.min(1, dt * 7);
+    // 小蛋在右前方，她稍微侧身朝它
+    yaw += (0.26 - yaw) * Math.min(1, dt * 5);
     yawVel = 0;
     lastRotateAt = now;
   } else if (act === 'spin') {
@@ -1340,6 +1354,14 @@ function tick() {
     });
 
     const rig = modelRoot.userData.islandRig;
+    // 蹲伏蓄力：膝盖弯下去
+    if (act === 'chase' && pounceCrouch > 0.02) {
+      for (const leg of rig.legs) {
+        pitchBone(rig, leg.upper, 0.42 * pounceCrouch);
+        pitchBone(rig, leg.lower, -0.68 * pounceCrouch);
+      }
+    }
+
     // 坐姿：绕骨骼自身局部轴。秋千必须真的「坐」下去 —— 大腿前伸接近水平、
     // 小腿折回来垂在座板前，只留鞋尖。之前大腿往后收 +0.30，看着就是
     // 「站在秋千前面、背后挂个秋千」，所以秋千单独一套角度。
@@ -1364,6 +1386,15 @@ function tick() {
       spinner.rotation.x += (0 - spinner.rotation.x) * Math.min(1, dt * 6);
     }
 
+    // 扑击：两条胳膊一起往前伸，抓空了再收回来
+    if (act === 'chase' && pounceLeap > 0.02) {
+      const reach = pounceLeap;
+      for (const arm of rig.arms) {
+        pitchBone(rig, arm.upper, 1.35 * reach, 'z');
+        pitchBone(rig, arm.lower, 0.5 * reach, 'z');
+      }
+    }
+
     // 跑步/走路的手臂前后摆（animation.js 只管腿，胳膊一直垂着，看着像飘）
     if (act === 'chase' || act === 'walk') {
       const amp = act === 'chase' ? 1.15 : 0.42;
@@ -1380,7 +1411,7 @@ function tick() {
 
   if (act !== lastActSent) {
     lastActSent = act;
-    window.pet?.patrol?.(act === 'chase');   // 只有追小精灵才满屏跑
+    window.pet?.patrol?.(false);             // 扑小蛋是原地动作，窗口不再满屏跑
   }
 
   sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算

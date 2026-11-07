@@ -1257,7 +1257,7 @@ const ACT_MENU = [
   { key: 'bloom', label: '满地开花' },
   { key: 'wave',  label: '挥手打招呼' },
   { key: 'float', label: '飘起来' },
-  { key: 'chase', label: '追小精灵' },
+  { key: 'chase', label: '扑小蛋' },
   { key: 'sleep', label: '打瞌睡' }
 ];
 
