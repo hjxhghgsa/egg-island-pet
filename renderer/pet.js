@@ -1137,8 +1137,16 @@ function tick() {
   if (fairyOn) {
     const spd = act === 'chase' ? 2.1 : 0.85;
     const fz = 0.44 + Math.cos(t * spd) * 0.06;
-    // 飘在身侧，别趴在头顶挡脸
-    fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
+    if (act === 'chase') {
+      // 追跑时小精灵要「在前面领跑」，忽远忽近；之前它一直贴在她身侧，
+      // 看着就是「抱着宠物原地平移」，根本看不出谁追谁。
+      const dir = patrolDir || (Math.cos(t * 1.15) >= 0 ? 1 : -1);
+      const lead = 0.30 + 0.11 * Math.sin(t * 2.4);
+      fairy.position.set(dir * lead, 0.60 + Math.sin(t * 3.4) * 0.05, 0.10);
+    } else {
+      // 平时飘在身侧，别趴在头顶挡脸
+      fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
+    }
     fairyGlow.material.opacity = 0.30 + Math.sin(t * 4) * 0.08;
     if (eggRoot) {
       eggBounce = Math.max(0, eggBounce - dt * 1.8);
@@ -1288,7 +1296,8 @@ function tick() {
      加上追小精灵时整个人转 ±0.55 —— 现在都收掉，默认永远朝前。 */
   if (act === 'chase') {
     // 巡逻时朝跑动方向侧身（0.8rad ≈ 45°，看着像在往前跑而不是横着飘）
-    const wantYaw = patrolDir ? patrolDir * -0.8 : Math.sin(t * 2.1) * 0.16;
+    // 正号才是朝跑动方向：之前写成 -0.8，结果她背对着小精灵「倒着跑」
+    const wantYaw = patrolDir ? patrolDir * 0.8 : Math.sin(t * 2.1) * 0.16;
     yaw += (wantYaw - yaw) * Math.min(1, dt * 7);
     yawVel = 0;
     lastRotateAt = now;
@@ -1322,7 +1331,8 @@ function tick() {
     updateRig(modelRoot, {
       time: t,
       dt,
-      speed: act === 'walk' ? 0.55 : (act === 'chase' ? 1.7 : 0),
+      // run 系数是 clamp((speed-3.7)/3)，1.7 永远触发不了跑步幅度，等于快走
+      speed: act === 'walk' ? 0.55 : (act === 'chase' ? 5.2 : 0),
       turn: act === 'swing' ? Math.sin(t * 1.65) * 0.12 : 0,
       floating: floatAmt,
       groundHeight: 0,
@@ -1345,6 +1355,26 @@ function tick() {
       }
     }
     softenHands(rig, act === 'wave', t);
+
+    // 跑起来要「颠」：只迈腿不上下起伏，看着就是在滑
+    if (act === 'chase') {
+      spinner.position.y += Math.abs(Math.sin(rig.phase)) * 0.022;
+      spinner.rotation.x = 0.07;                       // 身体略前倾
+    } else {
+      spinner.rotation.x += (0 - spinner.rotation.x) * Math.min(1, dt * 6);
+    }
+
+    // 跑步/走路的手臂前后摆（animation.js 只管腿，胳膊一直垂着，看着像飘）
+    if (act === 'chase' || act === 'walk') {
+      const amp = act === 'chase' ? 1.15 : 0.42;
+      const bend = act === 'chase' ? 1.25 : 0.28;
+      for (const arm of rig.arms) {
+        // 与同侧腿反相：左腿在前时左臂在后
+        const ph = rig.phase + (arm.side === 'Left' ? Math.PI : 0);
+        pitchBone(rig, arm.upper, Math.sin(ph) * amp);
+        pitchBone(rig, arm.lower, -bend * (0.55 + 0.45 * Math.sin(ph)));
+      }
+    }
     modelRoot.updateWorldMatrix(true, true);
   }
 

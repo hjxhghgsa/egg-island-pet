@@ -1298,7 +1298,7 @@ function patrolStart() {
   patrolTimer = setInterval(() => {
     if (!win || win.isDestroyed() || !win.isVisible()) { patrolStop(); return; }
     const maxX = area.x + area.width - WIN_W;
-    patrolX += patrolDir * 6.4;                       // 30fps × 6.4px ≈ 190px/s
+    patrolX += patrolDir * 4.4;                       // 30fps × 4.4px ≈ 130px/s，和步频对得上才不打滑
     if (patrolX >= maxX) { patrolX = maxX; patrolDir = -1; }
     if (patrolX <= area.x) { patrolX = area.x; patrolDir = 1; }
     if (process.env.PET_DEBUG && Math.round(patrolX) % 240 < 7) console.log('[patrol]', Math.round(patrolX));
