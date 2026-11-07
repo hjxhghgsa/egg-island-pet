@@ -3,6 +3,7 @@ dist/
 *.log
 _*.png
 _model.json
+_asr_test.*
 # 离线 ASR 模型 190MB，接入语音输入前不进仓库 / 不进安装包
 models/asr/
 .DS_Store

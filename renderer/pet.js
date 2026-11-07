@@ -593,6 +593,7 @@ async function loadModel(modelKey, { announce = true } = {}) {
   }
   spinner.add(holderLike);
   modelRoot = holderLike;
+
   frameCamera(info.height);
   baseY = 0;
   jumpY = 0;
@@ -646,8 +647,14 @@ function hitTest(ev) {
   raycaster.setFromCamera(pointer, camera);
   // 点小蛋 = 找它说话；点人物 = 旋转 / 放歌
   if (eggRoot && fairyOn && raycaster.intersectObjects(eggRoot.children, true).length) return 'egg';
-  if (!modelRoot) return null;
-  return raycaster.intersectObjects(modelRoot.children, true).length ? 'body' : null;
+  if (modelRoot && raycaster.intersectObjects(modelRoot.children, true).length) return 'body';
+  // 宽松兜底：角色一跳 / 一转，raycast 就容易打空，鼠标立刻被透明区穿透，
+  // 连点时表现为「点不到、要等一下」。窗口中央一个椭圆都算命中，只覆盖角色附近。
+  const cx = rect.width * 0.50, cy = rect.height * 0.55;
+  const dx = (ev.clientX - rect.left - cx) / (rect.width * 0.34);
+  const dy = (ev.clientY - rect.top - cy) / (rect.height * 0.40);
+  if (dx * dx + dy * dy < 1) return 'body';
+  return null;
 }
 
 window.addEventListener('pointermove', (ev) => {
@@ -799,21 +806,30 @@ function nextTrack() {
 /* ---------------- 动作 ---------------- */
 let tapCount = 0;
 let lastTapAt = 0;
+let tapTimer = null;
+let dblTimer = null;
+let comboMode = false;       // 已判定为连击：期间稳住角色、不乱切歌、不误开聊天
+
+const CLICK_GAP = 430;        // 两次点击间隔小于它算「连续」
+const COMBO_IDLE = 1200;       // 多久没点就退出连击
 
 const TAP_LINES = ['嘿嘿~', '别戳啦', '有点痒!', '再来一下?', '呀!', '陪我玩嘛', '今天也辛苦啦', '被你发现啦'];
 
 function tap() {
-  // 双击打开聊天，单击放歌
-  const wallNow = Date.now();
-  if (wallNow - lastTapAt < 330) {
-    lastTapAt = 0;
-    window.pet?.openChat();
-    return;
+  const now = performance.now();
+  const gap = now - lastTapAt;
+  lastTapAt = now;
+  if (gap > CLICK_GAP) { tapCount = 0; comboMode = false; }
+  tapCount++;
+  if (tapCount >= 3) {
+    comboMode = true;
+    clearTimeout(dblTimer);   // 有第 3 下就说明不是双击，别把聊天窗弹出来
   }
-  lastTapAt = wallNow;
+  clearTimeout(tapTimer);
+  tapTimer = setTimeout(() => { tapCount = 0; comboMode = false; }, COMBO_IDLE);
 
-  // 连击越高，反馈越夸张：爱心 → 星星 → 满地开花
-  const combo = tapCount + 1;
+  // 每一击都立刻给反馈，绝不延迟等判定 —— 以前 330ms 内第二下会被吞掉去开聊天
+  const combo = tapCount;
   popBits(combo >= 4 ? 'star' : 'love', Math.min(20, 6 + combo * 2));
   if (combo >= 3) {
     for (let i = 0; i < Math.min(6, combo); i++) {
@@ -824,15 +840,30 @@ function tap() {
     showBubble(TAP_LINES[Math.floor(Math.random() * TAP_LINES.length)]);
   }
 
-  jumpVel = 2.6 + Math.min(tapCount, 3) * 0.3;
-  yawVel = 1.3;
-  lastRotateAt = performance.now();   // 必须与 tick 同源，否则回正永远不触发
-  toggleMusic();
-  tapCount++;
-  clearTimeout(tapTimer);
-  tapTimer = setTimeout(() => { tapCount = 0; }, 1200);
+  if (combo < 3) {
+    jumpVel = 2.4;                     // 单点 / 双击：照旧蹦一下、转一点
+    yawVel = 1.1;
+    lastRotateAt = now;                // 必须与 tick 同源，否则回正永远不触发
+  } else {
+    // 连击：只用压扁代替起跳，角色位置几乎不动，才不会「点着点着点空」
+    squash = 0.92;
+    yawVel *= 0.2;
+    jumpVel = 0.8;
+  }
+  if (combo === 1) toggleMusic();       // 只有单点切歌，连击时音乐不再一下开一下关
 }
-let tapTimer = null;
+
+// 双击开聊天交给浏览器原生判定；再等 300ms 看会不会来第 3 下，
+// 有的话就是连击，取消开聊天（聊天窗一开宠物会被隐藏，看起来就是「突然停了」）
+window.addEventListener('dblclick', (ev) => {
+  if (ev.button !== 0) return;
+  clearTimeout(dblTimer);
+  dblTimer = setTimeout(() => {
+    if (!comboMode && tapCount <= 2) window.pet?.openChat();
+  }, 300);
+});
+
+window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
 
 /* ---------------- 尺寸 ---------------- */
 function resize() {
@@ -861,7 +892,11 @@ function tick() {
 
   /* 节目轮换：不连续重复同一套 */
   actTimer -= dt;
-  if (actTimer <= 0) pickAct();
+  if (actTimer <= 0) {
+    // 连击时别突然换节目（切到坐下/睡觉会让人以为「点着点着就停了」）
+    if (comboMode) actTimer = 1.0;
+    else pickAct();
+  }
 
   /* 小精灵：绕着角色飞，扇翅膀 + 拖尾光点 */
   fairy.visible = fairyOn;
@@ -1033,9 +1068,11 @@ function tick() {
       const kick = act === 'swing' ? Math.sin(t * 1.65) * 0.10 : 0;
       for (const leg of rig.legs) {
         const side = leg.side === 'Left' ? 1 : -1;
-        pitchBone(rig, leg.upper, (-1.32 + kick * 0.4) * sitBlend);
-        pitchBone(rig, leg.lower, (1.24 - kick * 0.35) * sitBlend);
-        pitchBone(rig, leg.foot, (-0.16 + kick * 0.45 + side * 0.015) * sitBlend);
+        // 腿往裙摆后面收：正面只留一点鞋尖，别把整条小腿露出来。
+        // 模型是单个 mesh，改不了裙长，只能靠姿态把腿藏进原有裙摆里。
+        pitchBone(rig, leg.upper, (0.30 + kick * 0.20) * sitBlend);
+        pitchBone(rig, leg.lower, (-0.24 - kick * 0.16) * sitBlend);
+        pitchBone(rig, leg.foot, (-0.06 + kick * 0.22 + side * 0.01) * sitBlend);
       }
     }
     softenHands(rig, act === 'wave', t);

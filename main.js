@@ -287,6 +287,91 @@ app.whenReady().then(async () => {
       } catch (e) { console.error('[music-test fail]', e.message); }
     }, 5000);
   }
+  // 调试：PET_ASR_IPC=1 完全模拟渲染层分块送 PCM，验证 IPC + addon 全链路
+  if (process.env.PET_ASR_IPC) {
+    setTimeout(async () => {
+      try {
+        // 打包版也能测：优先从用户目录拿测试音频，结果写文件（GUI 进程 stdout 不进管道）
+        const probeOut = path.join(app.getPath('userData'), '_asr_ipc_result.txt');
+        const raw = [app.getPath('userData'), __dirname]
+          .map((d) => path.join(d, '_asr_test.raw'))
+          .find((p) => fs.existsSync(p));
+        if (!raw) { fs.writeFileSync(probeOut, 'NO_RAW'); app.isQuitting = true; app.quit(); return; }
+        const b64 = fs.readFileSync(raw).toString('base64');
+        const r = await win.webContents.executeJavaScript(`(async () => {
+          const bin = atob(${JSON.stringify(b64)});
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const all = new Float32Array(bytes.buffer);
+          const st = await window.pet.asrStart();
+          if (!st.ok) return 'START_FAIL ' + st.error;
+          for (let i = 0; i < all.length; i += 1600) {
+            window.pet.asrChunk(new Float32Array(all.slice(i, i + 1600)).buffer);
+          }
+          return JSON.stringify(await window.pet.asrEnd());
+        })()`);
+        console.log('[asr-ipc]', r);
+        try { fs.writeFileSync(probeOut, String(r)); } catch {}
+      } catch (e) {
+        console.error('[asr-ipc fail]', e.stack || e.message);
+        try { fs.writeFileSync(path.join(app.getPath('userData'), '_asr_ipc_result.txt'), 'ERR ' + e.message); } catch {}
+      }
+      app.isQuitting = true; app.quit();
+    }, 2500);
+  }
+  // 调试：PET_ASR_TEST=1 用本地 wav 走一遍真实主进程识别链路
+  if (process.env.PET_ASR_TEST) {
+    setTimeout(async () => {
+      try {
+        // 用 raw f32 文件模拟渲染层通过 IPC 传来的普通 ArrayBuffer，
+        // 不走 readWave()（它返回 native external buffer，Electron 会拒绝）
+        const raw = path.join(__dirname, '_asr_test.raw');
+        if (!fs.existsSync(raw)) { console.log('[asr-test] no raw'); }
+        else {
+          const buf = fs.readFileSync(raw);
+          const all = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+          console.log('[asr-test] step1 samples', all.length);
+          const rec = getAsr();
+          console.log('[asr-test] step2 recognizer ok');
+          const s = rec.createStream();
+          console.log('[asr-test] step3 stream ok');
+          for (let i = 0; i < all.length; i += 1600) {
+            s.acceptWaveform({ samples: new Float32Array(all.slice(i, i + 1600)), sampleRate: 16000 });
+            while (rec.isReady(s)) rec.decode(s);
+          }
+          console.log('[asr-test] step4 fed');
+          s.inputFinished();
+          while (rec.isReady(s)) rec.decode(s);
+          const rawText = rec.getResult(s).text;
+          console.log('[asr-test] RESULT', JSON.stringify(rawText));
+          const polished = await polishAsr(rawText);
+          console.log('[asr-test] POLISHED', JSON.stringify(polished));
+        }
+      } catch (e) { console.error('[asr-test fail]', e.stack || e.message); }
+      app.isQuitting = true; app.quit();
+    }, 2000);
+  }
+  // 调试：PET_CLICK=1 模拟连续点击，验证单点/双击/连击识别
+  if (process.env.PET_CLICK) {
+    setTimeout(async () => {
+      try {
+        const r = await win.webContents.executeJavaScript(`(async () => {
+          const c = document.getElementById('stage');
+          const x = innerWidth / 2, y = innerHeight * 0.55;
+          for (let i = 0; i < 6; i++) {
+            for (const type of ['pointerdown', 'pointerup']) {
+              c.dispatchEvent(new PointerEvent(type, {
+                clientX: x, clientY: y, button: 0, bubbles: true, pointerId: 1
+              }));
+            }
+            await new Promise(r => setTimeout(r, 160));
+          }
+          return JSON.stringify(window.__pet.clickState());
+        })()`);
+        console.log('[click]', r);
+      } catch (e) { console.error('[click fail]', e.message); }
+    }, 6000);
+  }
   if (process.env.PET_ACT) {
     setTimeout(() => {
       try {
@@ -697,6 +782,191 @@ ipcMain.handle('chat', async (_e, messages) => {
   const out = (msg && msg.content) || '';
   if (!out.trim()) throw new Error('接口没返回内容（可能 token 用完了）');
   return out.trim();
+});
+
+/* ---------------- 离线语音输入：微信式「按住说话」 ----------------
+   识别引擎用 sherpa-onnx 的中英双语 streaming zipformer，全程在本机跑，
+   不连 Google、不上传音频。微信输入法的识别服务是私有的、没有公开接口可内嵌；
+   这里用「本地流式模型 + 大模型纠错 + 意图判断」把「听得清 / 听得懂」补回来。 */
+const ASR_DIR = path.join(__dirname, 'models', 'asr');
+let asrRecognizer = null;
+let asrStream = null;
+let asrLastText = '';
+let asrSender = null;
+
+function getAsr() {
+  if (asrRecognizer) return asrRecognizer;
+  const { OnlineRecognizer } = require('sherpa-onnx-node');
+  const f = (n) => path.join(ASR_DIR, n);
+  asrRecognizer = new OnlineRecognizer({
+    featConfig: { sampleRate: 16000, featureDim: 80 },
+    modelConfig: {
+      transducer: {
+        encoder: f('encoder-epoch-99-avg-1.int8.onnx'),
+        decoder: f('decoder-epoch-99-avg-1.int8.onnx'),
+        joiner: f('joiner-epoch-99-avg-1.int8.onnx')
+      },
+      tokens: f('tokens.txt'),
+      bpeVocab: f('bpe.model'),
+      modelingUnit: 'bpe',
+      numThreads: 2,
+      debug: false,
+      provider: 'cpu'
+    },
+    decodingMethod: 'greedy_search',
+    maxActivePaths: 4,
+    enableEndpoint: false            // 按住说话是一次完整短句，不做断句
+  });
+  return asrRecognizer;
+}
+
+function asrEmit(channel, data) {
+  const wc = asrSender && !asrSender.isDestroyed()
+    ? asrSender
+    : (chatWin && !chatWin.isDestroyed() ? chatWin.webContents : null);
+  if (wc) wc.send(channel, data);
+}
+
+function asrDecode() {
+  if (!asrRecognizer || !asrStream) return '';
+  while (asrRecognizer.isReady(asrStream)) asrRecognizer.decode(asrStream);
+  try { return (asrRecognizer.getResult(asrStream).text || '').trim(); } catch { return ''; }
+}
+
+// 本地意图识别：断网 / API 超时也必须能听懂指令。
+// 规则写得宽松一点，好容纳识别出来的同音错字（「追专住」≈「专注」）。
+function localIntent(raw) {
+  const t = String(raw || '').replace(/[\s，。！？、,.:;]/g, '');
+  const rules = [
+    [/看看屏幕|看看我在干嘛|看一眼屏幕|瞄一眼|屏幕上是什么|看.{0,3}屏幕/, 'look'],
+    [/开始专注|开启专注|番茄钟|开始.{0,4}(专|番|计时)|专注.{0,3}分钟/, 'pomodoro'],
+    [/剪贴板|复制的内容|复制了什么|我复制|复制的东西/, 'clip'],
+    [/放歌|放音乐|听歌|下一首|换首歌/, 'music'],
+    [/隐藏|收起|躲起来|先退下/, 'hide'],
+    [/换个节目|换个动作|换一套|换节目/, 'act'],
+    [/翻译|译成|用英文说|英文怎么说/, 'translate']
+  ];
+  for (const [re, action] of rules) if (re.test(t)) return action;
+  return null;
+}
+
+// 语音识别难免同音错字（「屏墓」「番切钟」）：让大模型把字改漂亮，
+// 但意图判断以本地规则为底线，AI 挂了也不影响「听懂你在下指令」。
+async function polishAsr(raw) {
+  const local = localIntent(raw);
+  const fallback = {
+    text: raw,
+    intent: local ? 'command' : 'chat',
+    action: local || 'none'
+  };
+  const s = readSettings();
+  if (!s.apiKey || !s.apiUrl) return fallback;
+  const sys = [
+    '你是中文语音输入的后处理器。用户说的话由离线语音识别转写，可能有同音错字、漏字、没有标点。',
+    '只输出严格 JSON，不要 markdown、不要解释：',
+    '{"text":"纠正错字并补好标点的规范中文","intent":"chat|command","action":"look|pomodoro|clip|music|hide|act|translate|none"}',
+    '判断规则：让助手做事 → intent=command。看屏幕/看看我在干嘛=look；开始专注/番茄钟=pomodoro；',
+    '读剪贴板/复制的内容=clip；放歌/放音乐=music；隐藏/收起=hide；换个节目/换个动作=act；翻译=translate；',
+    '其他指令 action=none。只是聊天、提问、问候、吐槽 → intent=chat, action=none。',
+    '纠错时只改明显的同音错字和标点，不要改写原意、不要扩写、不要加内容。'
+  ].join('\n');
+  try {
+    const base = (s.apiUrl || '').replace(/\/+$/, '');
+    const res = await fetch(base + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + s.apiKey },
+      body: JSON.stringify({
+        model: s.apiModel || 'deepseek-flash',
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: raw }],
+        stream: false, max_tokens: 512, temperature: 0.1, reasoning_effort: 'low'
+      }),
+      signal: AbortSignal.timeout(9000)
+    });
+    if (!res.ok) {
+      if (process.env.PET_ASR_TEST) console.log('[polish http]', res.status, (await res.text().catch(() => '')).slice(0, 160));
+      return fallback;
+    }
+    const j = await res.json();
+    const msg = (((j.choices || [])[0] || {}).message) || {};
+    // deepseek-flash 是推理模型：token 给少了 content 会是空的，内容落在 reasoning_content
+    const out = msg.content || msg.reasoning_content || '';
+    if (process.env.PET_ASR_TEST) console.log('[polish raw]', String(out).slice(0, 240));
+    const m = String(out).match(/\{[\s\S]*\}/);
+    if (!m) return fallback;
+    const d = JSON.parse(m[0]);
+    const action = (d.action && d.action !== 'none') ? String(d.action) : (local || 'none');
+    return {
+      text: String(d.text || raw).trim(),
+      intent: action !== 'none' ? 'command' : 'chat',
+      action
+    };
+  } catch (e) {
+    if (process.env.PET_ASR_TEST) console.log('[polish err]', (e && e.message) || e);
+    return fallback;
+  }
+}
+
+ipcMain.handle('asr-start', (e) => {
+  try {
+    const rec = getAsr();
+    asrStream = rec.createStream();
+    asrLastText = '';
+    asrSender = e.sender;
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String((err && err.message) || err) };
+  }
+});
+
+ipcMain.on('asr-chunk', (_e, buf) => {
+  if (!asrStream || !asrRecognizer) return;
+  try {
+    const incoming = new Float32Array(buf);
+    if (!incoming.length) return;
+    // 再复制一层：Electron 会拒绝 native external buffer，
+    // 复制成普通 JS Float32Array 后 addon 才收（readWave 就栽在这里）
+    const samples = new Float32Array(incoming.length);
+    samples.set(incoming);
+    asrStream.acceptWaveform({ samples, sampleRate: 16000 });
+    const text = asrDecode();
+    if (text && text !== asrLastText) {
+      asrLastText = text;
+      asrEmit('asr-partial', { text });
+    }
+  } catch (err) {
+    asrEmit('asr-error', { error: String((err && err.message) || err) });
+  }
+});
+
+ipcMain.handle('asr-end', async () => {
+  if (!asrStream || !asrRecognizer) return { text: '', intent: 'chat', action: 'none' };
+  try {
+    asrStream.inputFinished();
+    const text = asrDecode() || asrLastText;
+    asrStream = null;
+    if (!text) return { text: '', intent: 'chat', action: 'none' };
+    const p = await polishAsr(text);
+    return { raw: text, ...p };
+  } catch (err) {
+    asrStream = null;
+    return { text: asrLastText, intent: 'chat', action: 'none', error: String((err && err.message) || err) };
+  }
+});
+
+ipcMain.on('asr-cancel', () => { asrStream = null; asrLastText = ''; });
+
+ipcMain.on('voice-command', (_e, action, raw) => {
+  switch (action) {
+    case 'look': if (win) win.webContents.send('pet-look'); break;
+    case 'clip': if (win) win.webContents.send('pet-clip'); break;
+    case 'translate': if (win) win.webContents.send('pet-clip'); break;
+    case 'pomodoro': startPomodoro(); break;
+    case 'music': if (win) win.webContents.send('toggle-music'); break;
+    case 'act': if (win) win.webContents.send('next-act'); break;
+    case 'hide': if (win) win.hide(); break;
+    default: break;
+  }
+  asrEmit('asr-command-done', { action, raw });
 });
 
 /* ---------------- 小蛋助手：陪伴 / 健康提醒 / 番茄钟 ----------------

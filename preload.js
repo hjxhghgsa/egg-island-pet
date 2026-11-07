@@ -34,5 +34,14 @@ contextBridge.exposeInMainWorld('pet', {
   onPetLook: (cb) => ipcRenderer.on('pet-look', () => cb()),
   onPetClip: (cb) => ipcRenderer.on('pet-clip', () => cb()),
   readClipboard: () => ipcRenderer.invoke('read-clipboard'),
-  notify: (title, body) => ipcRenderer.send('pet-notify', { title, body })
+  notify: (title, body) => ipcRenderer.send('pet-notify', { title, body }),
+  // 离线语音输入（按住说话）
+  asrStart: () => ipcRenderer.invoke('asr-start'),
+  asrChunk: (buf) => ipcRenderer.send('asr-chunk', buf),
+  asrEnd: () => ipcRenderer.invoke('asr-end'),
+  asrCancel: () => ipcRenderer.send('asr-cancel'),
+  onAsrPartial: (cb) => ipcRenderer.on('asr-partial', (_e, d) => cb(d)),
+  onAsrError: (cb) => ipcRenderer.on('asr-error', (_e, d) => cb(d)),
+  onAsrCommandDone: (cb) => ipcRenderer.on('asr-command-done', (_e, d) => cb(d)),
+  voiceCommand: (action, raw) => ipcRenderer.send('voice-command', action, raw)
 });

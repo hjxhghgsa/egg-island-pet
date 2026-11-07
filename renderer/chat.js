@@ -184,61 +184,108 @@ $('snipBtn').onclick = async () => {
   }
 };
 
-/* ---------------- 语音输入 ---------------- */
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recog = null;
-let recording = false;
+/* ---------------- 语音输入：本机离线识别 + 微信式按住说话 ----------------
+   以前用 Web Speech API 要连 Google，国内基本不可用。现在改成：
+   按住 → 16k 单声道 PCM → 主进程 sherpa-onnx 流式识别（实时上屏）
+   → 松手 → AI 纠正同音错字 + 判断「聊天 / 指令」→ 聊天直接发，指令直接执行。 */
+let asrOn = false;
+let asrCancelByDrag = false;
+let asrStartY = 0;
+let audioCtx = null, micStream = null, micNode = null;
 
-if (SR) {
-  recog = new SR();
-  recog.lang = 'zh-CN';
-  recog.interimResults = false;
-  recog.continuous = false;
-  recog.maxAlternatives = 1;
-
-  recog.onstart = () => {
-    recording = true;
-    $('mic').classList.add('rec');
-  };
-  recog.onresult = (e) => {
-    const text = (e.results[0][0].transcript || '').trim();
-    if (text) {
-      $('inp').value = text;
-      sendTyped();
-    } else {
-      tip('没听清，再说一次');
-    }
-  };
-  recog.onerror = (e) => {
-    recording = false;
-    $('mic').classList.remove('rec');
-    const m = {
-      'no-speech': '没听到声音，靠近点麦克风再说',
-      'not-allowed': '麦克风权限被拒了',
-      'audio-capture': '找不到麦克风',
-      network: '语音服务连不上（可能要梯子）'
-    };
-    tip((m[e.error] || ('语音识别出错：' + e.error)));
-  };
-  recog.onend = () => {
-    recording = false;
-    $('mic').classList.remove('rec');
-  };
-
-  const startRec = (e) => {
-    e.preventDefault();
-    if (busy || recording) return;
-    try { recog.start(); } catch { }
-  };
-  $('mic').addEventListener('pointerdown', startRec);
-  $('mic').addEventListener('pointerup', (e) => {
-    e.preventDefault();
-    if (recording) { try { recog.stop(); } catch { } }
-  });
-} else {
-  $('mic').disabled = true;
-  $('mic').title = '这个环境不支持语音识别';
+function setVoiceLayer(on, cancel) {
+  const l = $('voiceLayer');
+  l.classList.toggle('on', !!on);
+  l.classList.toggle('cancel', !!cancel);
+  $('vHint').textContent = cancel ? '松开取消' : '松开发送 · 上滑取消';
 }
+
+function stopMic() {
+  try { micNode?.disconnect(); } catch {}
+  try { micStream?.getTracks().forEach((t) => t.stop()); } catch {}
+  try { audioCtx?.close(); } catch {}
+  micNode = null; micStream = null; audioCtx = null;
+}
+
+async function startAsr(ev) {
+  if (busy || asrOn) return;
+  asrOn = true;
+  asrCancelByDrag = false;
+  asrStartY = ev.clientY;
+  $('mic').classList.add('rec');
+  setVoiceLayer(true, false);
+  $('vText').textContent = '正在听…';
+  try {
+    const r = await window.pet.asrStart();
+    if (!r.ok) throw new Error(r.error || '识别引擎没起来');
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const src = audioCtx.createMediaStreamSource(micStream);
+    micNode = audioCtx.createScriptProcessor(2048, 1, 1);
+    src.connect(micNode);
+    micNode.connect(audioCtx.destination);
+    micNode.onaudioprocess = (e) => {
+      if (!asrOn) return;
+      // AudioBuffer 会被复用，必须拷一份再跨进程传
+      const f = new Float32Array(e.inputBuffer.getChannelData(0));
+      window.pet.asrChunk(f.buffer);
+    };
+  } catch (err) {
+    stopAsr(true);
+    tip('语音输入起不来：' + (err.message || err));
+  }
+}
+
+async function stopAsr(cancel) {
+  if (!asrOn) return;
+  asrOn = false;
+  stopMic();
+  $('mic').classList.remove('rec');
+  setVoiceLayer(false, false);
+  if (cancel) { window.pet.asrCancel(); return; }
+
+  const thinking = tip('在听懂你说的话…');
+  let r;
+  try { r = await window.pet.asrEnd(); }
+  catch (e) { thinking.remove(); tip('识别失败：' + (e.message || e)); return; }
+  thinking.remove();
+  const text = (r.text || '').trim();
+  if (!text) { tip('没听清，再按着说一次～'); return; }
+
+  bubble('🎤 ' + text, 'me');
+  if (r.intent === 'command') {
+    window.pet.voiceCommand(r.action, text);
+    tip('听懂啦，正在帮你做～');
+  } else {
+    $('inp').value = '';
+    ask(text);                    // 微信式：松手就发
+  }
+}
+
+window.pet?.onAsrPartial?.((d) => { $('vText').textContent = (d && d.text) || '正在听…'; });
+window.pet?.onAsrError?.((d) => tip('识别出错：' + (d && d.error)));
+window.pet?.onAsrCommandDone?.((d) => tip('已执行：' + (d && d.raw)));
+
+const mic = $('mic');
+mic.title = '按住说话 · 上滑取消';
+mic.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  try { mic.setPointerCapture(e.pointerId); } catch {}
+  startAsr(e);
+});
+mic.addEventListener('pointermove', (e) => {
+  if (!asrOn) return;
+  const cancel = e.clientY - asrStartY < -55;      // 上滑取消
+  if (cancel !== asrCancelByDrag) {
+    asrCancelByDrag = cancel;
+    setVoiceLayer(true, cancel);
+  }
+});
+mic.addEventListener('pointerup', () => stopAsr(asrCancelByDrag));
+mic.addEventListener('pointercancel', () => stopAsr(true));
+mic.addEventListener('contextmenu', (e) => e.preventDefault());
 
 /* ---------------- 设置 ---------------- */
 async function loadCfg() {
@@ -267,6 +314,6 @@ $('cfgSave').onclick = () => {
 (async () => {
   const c = (await window.pet.getSettings()) || {};
   if (!c.apiKey) tip('点右上角 ⚙ 填 API Key 才能说话。');
-  else tip('她醒着。打字、🎤 说话、👁 看屏幕、⬚ 圈一块都行。');
+  else tip('她醒着。打字、🎤 按住说话（上滑取消）、👁 看屏幕、⬚ 圈一块都行。说话能直接下指令，比如「看看我在干嘛」「开始专注」。');
   $('inp').focus();
 })();
