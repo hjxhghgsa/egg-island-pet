@@ -194,7 +194,8 @@ function createWindow() {
   win.once('ready-to-show', () => {
     showPet();
     const q = s.quality || 'balanced';
-    win.webContents.send('apply-settings', { quality: q, scale: s.scale || 1 });
+    win.webContents.send('apply-settings', { quality: q, scale: s.scale || 1, model: s.model || 'cake' });
+    maybeGreet();                     // 启动露脸时说一句时段问候
     bootLog('ready-to-show / first paint');
     // 启动后就留在桌面上。不再「开完机 3 秒自己消失」——
     // 只有主人真的切进别的软件、且在托盘里开了自动隐藏时才收起。
@@ -236,6 +237,31 @@ function createWindow() {
   });
 }
 
+const GREETS = {
+  morning: ['早上好呀～', '早，今天也一起加油', '醒了？先喝口水'],
+  noon: ['中午了，吃点什么吧', '午后容易困，别硬撑', '歇十分钟再继续'],
+  evening: ['晚上好～', '今天辛苦啦', '收个尾就休息吧'],
+  night: ['这么晚还没睡？', '夜深了，早点睡', '我陪你一会儿就去睡吧']
+};
+
+function greetSlot() {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 11) return 'morning';
+  if (h >= 11 && h < 17) return 'noon';
+  if (h >= 17 && h < 23) return 'evening';
+  return 'night';
+}
+
+function maybeGreet() {
+  const slot = greetSlot();
+  const day = new Date().toISOString().slice(0, 10);
+  const s = readSettings();
+  if (s.greet === day + ':' + slot) return;      // 这个时段已经打过招呼了
+  writeSettings({ greet: day + ':' + slot });
+  const lines = GREETS[slot];
+  setTimeout(() => petSay(lines[Math.floor(Math.random() * lines.length)]), 700);
+}
+
 function summon() {
   if (!win || win.isDestroyed()) return createWindow();
   cancelAutoHide();
@@ -249,6 +275,7 @@ function summon() {
   userTouched = true;
   showPet({ focus: true });
   win.webContents.send('summon');
+  maybeGreet();
 }
 
 function dismiss() {
@@ -666,12 +693,17 @@ ipcMain.on('hover-state', (_e, hovering) => {
 
 // 拖动：渲染层按下后，主进程跟踪光标
 let lastDragPoint = null;
+let dragTrail = [];        // 最近的拖动采样，用来算松手速度
+let flingTimer = null;
+
 ipcMain.on('drag-start', () => {
   if (!win) return;
+  stopFling();
   const cursor = screen.getCursorScreenPoint();
   const b = win.getBounds();
   dragOrigin = { dx: cursor.x - b.x, dy: cursor.y - b.y };
   lastDragPoint = null;
+  dragTrail = [];
 });
 
 ipcMain.on('drag-move', () => {
@@ -680,6 +712,8 @@ ipcMain.on('drag-move', () => {
   // 光标没动就别反复 setBounds，长按右键时才不会一直重绘
   if (lastDragPoint && cursor.x === lastDragPoint.x && cursor.y === lastDragPoint.y) return;
   lastDragPoint = { x: cursor.x, y: cursor.y };
+  dragTrail.push({ x: cursor.x, y: cursor.y, t: Date.now() });
+  if (dragTrail.length > 8) dragTrail.shift();
   // 带尺寸一起写，保证拖动过程中窗口永远不会被拉大
   win.setBounds({
     x: cursor.x - dragOrigin.dx,
@@ -689,9 +723,61 @@ ipcMain.on('drag-move', () => {
   });
 });
 
+function stopFling() {
+  if (flingTimer) { clearInterval(flingTimer); flingTimer = null; }
+}
+
+// 甩出去：每帧位移衰减，撞到工作区边缘反弹，慢下来就停并记住位置
+function startFling(sx, sy) {
+  stopFling();
+  let vx = Math.max(-60, Math.min(60, sx));
+  let vy = Math.max(-60, Math.min(60, sy));
+  flingTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || !win.isVisible()) { stopFling(); return; }
+    const b = win.getBounds();
+    const area = screen.getDisplayMatching(b).workArea;
+    let x = b.x + vx;
+    let y = b.y + vy;
+    const minX = area.x, maxX = area.x + area.width - WIN_W;
+    const minY = area.y, maxY = area.y + area.height - WIN_H;
+    if (x < minX) { x = minX; vx = -vx * 0.55; }
+    if (x > maxX) { x = maxX; vx = -vx * 0.55; }
+    if (y < minY) { y = minY; vy = -vy * 0.55; }
+    if (y > maxY) { y = maxY; vy = -vy * 0.55; }
+    win.setBounds({ x: Math.round(x), y: Math.round(y), width: WIN_W, height: WIN_H });
+    vx *= 0.9; vy *= 0.9;
+    if (Math.hypot(vx, vy) < 0.6) {
+      stopFling();
+      const f = win.getBounds();
+      writeSettings({ x: f.x, y: f.y });
+    }
+  }, 16);
+}
+
 ipcMain.on('drag-end', () => {
   if (!win || !dragOrigin) return;
   dragOrigin = null;
+
+  // 松手速度（px/ms）：取最近 120ms 的两个采样点
+  let vx = 0, vy = 0;
+  if (dragTrail.length >= 2) {
+    const now = Date.now();
+    const recent = dragTrail.filter((p) => now - p.t < 140);
+    if (recent.length >= 2) {
+      const a0 = recent[0], a1 = recent[recent.length - 1];
+      const dt = Math.max(16, a1.t - a0.t);
+      vx = (a1.x - a0.x) / dt;
+      vy = (a1.y - a0.y) / dt;
+    }
+  }
+  dragTrail = [];
+
+  // 甩得够快就滑一段，慢慢蹭过去的那点速度不算
+  if (Math.hypot(vx, vy) > 0.7) {
+    startFling(vx * 16, vy * 16);      // 换算成每帧位移
+    return;
+  }
+
   let b = win.getBounds();
   // 松手时贴边：离屏幕左右边缘 28px 内就吸过去，别让她半截挂在屏幕外
   const area = screen.getDisplayMatching(b).workArea;

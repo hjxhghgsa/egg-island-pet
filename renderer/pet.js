@@ -935,6 +935,26 @@ audio.addEventListener('ended', () => {
   audio.play().catch(() => {});
 });
 
+/* 跟着歌摇摆：把 <audio> 接进 WebAudio，取低频能量驱动身体起伏。
+   只建一次（MediaElementSource 不允许重复创建），接上后必须再连到 destination 才有声音。 */
+let analyser = null, analyserData = null, beat = 0;
+function ensureAnalyser() {
+  if (analyser) return true;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = ctx.createMediaElementSource(audio);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.72;
+    src.connect(analyser);
+    analyser.connect(ctx.destination);
+    analyserData = new Uint8Array(analyser.frequencyBinCount);
+    if (ctx.state === 'suspended') ctx.resume();
+    return true;
+  } catch { analyser = null; return false; }
+}
+audio.addEventListener('play', () => { ensureAnalyser(); });
+
 async function toggleMusic() {
   if (!tracks.length) {
     tracks = (await window.pet?.listMusic()) || [];
@@ -1450,6 +1470,22 @@ function tick() {
 
   if (act !== lastActSent) {
     lastActSent = act;
+  }
+
+  // 播歌时跟着鼓点起伏：低频能量 → 上下颠 + 轻微左右摇
+  if (analyser && !audio.paused) {
+    analyser.getByteFrequencyData(analyserData);
+    let sum = 0;
+    for (let i = 0; i < 24; i++) sum += analyserData[i];
+    const e = sum / (24 * 255);
+    beat += (e - beat) * Math.min(1, dt * 12);
+  } else {
+    beat *= 0.94;
+  }
+  if (beat > 0.02) {
+    spinner.position.y += beat * 0.03;
+    spinner.scale.y *= 1 + beat * 0.05;
+    spinner.rotation.z = Math.sin(t * 6.4) * beat * 0.07;
   }
 
   // 影子跟着高度变化：跳起来缩小、变淡，落地恢复，才有「踩在地上」的感觉

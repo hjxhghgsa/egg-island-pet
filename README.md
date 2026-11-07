@@ -159,6 +159,18 @@ dist\EggIslandPet.exe                  ← 单文件，方便拷给别人 / 上�
 | [SUDARI](https://github.com/seojaeohcode/SUDARI) | 番茄钟；**提醒做成角色的一句话，而不是系统弹窗** |
 | [Desktop-pet](https://github.com/gcloudream/Desktop-pet) | 按时段切换问候、疲劳感 |
 | [Mintu](https://github.com/HuseynDeveloper/Mintu) | 屏幕感知、智能剪贴板 |
+| [Shimeji](https://github.com/kilkakon/Shimeji-ee) | 甩出去有惯性、松手贴边 |
+| [BongoCat](https://github.com/ayangweb/BongoCat) | 跟着声音律动、低开销常驻 |
+
+### 手感上的细节（这次补的）
+
+- **注视**：鼠标在屏幕哪边，她就微微转头看过去（头最多 24°，胸口跟三分之一）。拖动她时不抢控制权。
+- **跟着歌摇摆**：放歌时用 WebAudio 读低频能量，身体跟着鼓点起伏、轻轻左右晃。没歌就自然停。
+- **甩出去**：右键拖着甩一下松手，她会带着惯性滑出去、撞到屏幕边缘弹回来，摩擦停下后记住位置。
+  慢慢挪过去的那点速度不算，不会误触发。
+- **贴边**：松手时离左右屏幕边 28px 内自动吸过去，不会半截挂在屏幕外。
+- **接触阴影**：脚下有一圈很淡的椭圆影子，跳起来会缩小变淡——没有影子的桌宠永远像贴在屏幕上。
+- **时段问候**：早 / 午 / 晚 / 深夜各一句话，同一个时段只说一次，重启也不会重复。
 
 ### 它主动做的
 
