@@ -46,10 +46,11 @@ const MODELS = {
   cake: { file: 'character-cake.glb', height: 1.35, label: '蛋糕纯' },
   jade: { file: 'character-jade.glb', height: 1.35, label: '珠玉纯' },
   // 照着蛋糕纯重建的 3D 模型：已用 tools/rig_transfer.py 迁移 47 根骨骼 + 蒙皮权重，
-  // 连 node_0 / Armature 父链一起搬，网格 / 骨骼 / 权重三者与蛋糕纯同一坐标系，
+  // 连 node_0 / Armature 父链一起搬，网格 / 骨骼 / 权重三者与蛋糕纯同一坐标系；
+  // 另外移植了蛋糕纯的手掌 + 十根手指（25 根手指骨全有权重）。
   // 走路 / 秋千 / 贴边探头 / 15 套节目 / 手势全部和原角色同一套 rig 跑。
-  // faceOff 只因为脸部比例不同、不叠表情贴片；静态原件 character-rebuilt.glb 留作对照。
-  rebuilt: { file: 'character-rebuilt-rigged.glb', height: 1.35, label: '重建版·蛋糕纯', faceOff: true }
+  // 静态原件 character-rebuilt.glb 留作对照。
+  rebuilt: { file: 'character-rebuilt-rigged.glb', height: 1.35, label: '重建版·蛋糕纯' }
 };
 
 let currentKey = 'cake';
@@ -1006,11 +1007,11 @@ async function loadModel(modelKey, { announce = true } = {}) {
   // 换角色时重新登记手指骨、重新探测脸部位置（新模型也能自动长出表情）
   gestures.bind(rig, (bone, a, axis) => pitchBone(rig, bone, a, axis));
   faceLayer.bind(THREE, holderLike, rig);
-  // 重建版已经有真骨架，但脸是 AI 图生 3D 重画过的，五官比例和原角色差一截，
-  // 实测贴片会落到脸颊上。与其给出一张歪脸，不如让它保持干净；
-  // 表情 / 口型 / 精细手势完整留给蛋糕纯 / 珠玉纯两位。
-  // 想给重建版也开，用 __pet.faceHold / __pet.calibrateFace 自行校准即可。
+  // 重建版现在有真 head 骨骼，probeFace 能自动定位五官，表情 / 口型默认开启。
+  // 换了五官比例不同的模型时，可在 MODELS 里给 face 参数做像素级微调；
+  // 也能用 __pet.faceHold / __pet.calibrateFace 在运行时校准。
   faceLayer.setEnabled(!info.faceOff);
+  if (info.face) faceLayer.calibrate(info.face);
   window.__pet.faceReady = faceLayer.state().ready;
   if (rig?.hips) {
     holderLike.updateWorldMatrix(true, true);

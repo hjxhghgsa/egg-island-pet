@@ -119,6 +119,105 @@ def add_acc(j, bv, ctype, comp, count, extra=None):
     return len(j['accessors']) - 1
 
 
+HAND_RADIUS = 0.055
+SKIN_COLOR = [0.97, 0.86, 0.81, 1.0]
+
+
+def bone_positions(ibm):
+    """IBM 是 joint bind 世界矩阵的逆；刚体 [R|t] 的逆平移 = -R^T t。"""
+    out = []
+    for m16 in ibm:
+        m = [[m16[c * 4 + r] for c in range(4)] for r in range(4)]
+        t = [m[i][3] for i in range(3)]
+        out.append(tuple(-sum(m[i][c] * t[i] for i in range(3)) for c in range(3)))
+    return out
+
+
+def attach_cake_hands(jc, bc, jr, br, arm_node):
+    """把蛋糕纯的手掌 + 十根手指（连同完整手指骨权重）整块搬到重建模型上。
+
+    AI 图生 3D 的重建版根本没有手指几何：手指骨 bind 位置 0.03 半径内 0 个顶点，
+    光补权重也看不见东西。cake 却有 490 个手部顶点、25 根手指骨全有权重，
+    而且两份模型现在同坐标系，所以直接移植这双现成的手最还原、也最轻
+    （纯色材质，不额外带一张贴图）。7 套手势因此可以真的卷手指。
+    """
+    pr = jc['meshes'][0]['primitives'][0]
+    pos = read_acc(jc, bc, pr['attributes']['POSITION'])
+    nor = read_acc(jc, bc, pr['attributes']['NORMAL'])
+    uv = read_acc(jc, bc, pr['attributes']['TEXCOORD_0'])
+    js = read_acc(jc, bc, pr['attributes']['JOINTS_0'])
+    ws = read_acc(jc, bc, pr['attributes']['WEIGHTS_0'])
+    idx = [int(x[0]) for x in read_acc(jc, bc, pr['indices'])]
+    ibm = read_acc(jc, bc, jc['skins'][0]['inverseBindMatrices'])
+    names = [jc['nodes'][x].get('name', '') for x in jc['skins'][0]['joints']]
+    bp = bone_positions(ibm)
+    hand_joints = [bp[k] for k, n in enumerate(names) if 'Hand' in n]
+
+    r2 = HAND_RADIUS ** 2
+    mark = [False] * len(pos)
+    for k, p in enumerate(pos):
+        for q in hand_joints:
+            if (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (p[2] - q[2]) ** 2 < r2:
+                mark[k] = True
+                break
+
+    # 只取三个顶点全在手部区域的三角形，切口才不会拖出身体的一大片
+    tris = [tuple(idx[t:t + 3]) for t in range(0, len(idx), 3)
+            if all(mark[v] for v in idx[t:t + 3])]
+    remap, vids = {}, []
+    for tri in tris:
+        for v in tri:
+            if v not in remap:
+                remap[v] = len(vids)
+                vids.append(v)
+    new_idx = [remap[v] for tri in tris for v in tri]
+
+    def acc(values, comp, ctype, fmt, target, extra=None):
+        flat = [x for row in values for x in row]
+        raw = struct.pack('<' + fmt * len(flat), *flat)
+        return add_acc(jr, add_view(jr, br, raw, target), comp, ctype,
+                       len(values), extra)
+
+    p_out = [tuple(pos[v]) for v in vids]
+    pa = acc(p_out, 'VEC3', 5126, 'f', 34962, {
+        'min': [min(r[k] for r in p_out) for k in range(3)],
+        'max': [max(r[k] for r in p_out) for k in range(3)]
+    })
+    na = acc([tuple(nor[v]) for v in vids], 'VEC3', 5126, 'f', 34962)
+    ua = acc([tuple(uv[v]) for v in vids], 'VEC2', 5126, 'f', 34962)
+    ja = acc([[int(x) for x in js[v]] for v in vids], 'VEC4', 5123, 'H', 34962)
+    wa = acc([[float(x) for x in ws[v]] for v in vids], 'VEC4', 5126, 'f', 34962)
+    ia = acc([[v] for v in new_idx], 'SCALAR', 5125, 'I', 34963)
+
+    jr.setdefault('materials', []).append({
+        'name': 'cake-hands-skin',
+        'pbrMetallicRoughness': {
+            'baseColorFactor': SKIN_COLOR,
+            'metallicFactor': 0.0,
+            'roughnessFactor': 0.72
+        },
+        'doubleSided': True
+    })
+    mat_i = len(jr['materials']) - 1
+    jr['meshes'].append({
+        'name': 'cake-hands',
+        'primitives': [{
+            'attributes': {'POSITION': pa, 'NORMAL': na, 'TEXCOORD_0': ua,
+                           'JOINTS_0': ja, 'WEIGHTS_0': wa},
+            'indices': ia,
+            'material': mat_i,
+            'mode': 4
+        }]
+    })
+    hand_node = len(jr['nodes'])
+    jr['nodes'].append({'name': 'cake-hands', 'mesh': len(jr['meshes']) - 1, 'skin': 0})
+    # 跟重建网格同级挂在 Armature 下，共享 skin 0 和同一套骨骼
+    jr['nodes'][arm_node]['children'].append(hand_node)
+    print('cake hands: verts=%d tris=%d fingerBones=%d'
+          % (len(vids), len(tris), len(hand_joints) - 2))
+    return len(vids), len(tris)
+
+
 def main():
     jc, bc = load_glb(CAKE)
     jr, br = load_glb(SRC)
@@ -269,14 +368,16 @@ def main():
     jr['nodes'][new_n0]['children'] = [new_arm]
     jr['nodes'][new_arm]['children'] = [0, old2new[hips]]
     jr['scenes'][0]['nodes'] = [new_n0]
+
+    attach_cake_hands(jc, bc, jr, br, new_arm)
     jr['buffers'][0]['byteLength'] = len(br)
     jr['asset'] = dict(jr.get('asset', {}))
     jr['asset']['generator'] = 'cake rig transferred by tools/rig_transfer.py'
 
     size = write_glb(OUT, jr, br)
-    print('WROTE %s  %.2f MB  nodes=%d skins=%d joints=%d'
-          % (OUT, size / 1048576, len(jr['nodes']), len(jr['skins']),
-             len(jr['skins'][0]['joints'])))
+    print('WROTE %s  %.2f MB  nodes=%d meshes=%d skins=%d joints=%d'
+          % (OUT, size / 1048576, len(jr['nodes']), len(jr['meshes']),
+             len(jr['skins']), len(jr['skins'][0]['joints'])))
 
 
 if __name__ == '__main__':

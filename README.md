@@ -40,6 +40,18 @@ dist\EggIslandPet.exe                  ← 单文件，方便拷给别人 / 上�
 
 `win-unpacked` 整个文件夹要一起留着，别只把 exe 抠出来。两个版本共用同一份设置和歌单。
 
+> 重新打包时如果旧桌宠还在跑，`dist\win-unpacked` 里的 `d3dcompiler_47.dll` 会被进程锁住，
+> electron-builder 清空目录会报 `Access is denied`。不要强杀用户桌面上那只，
+> 指定一个独立输出目录即可，两个产物都会在它下面：
+>
+> ```bash
+> ./node_modules/.bin/electron-builder --win dir      -c.directories.output=dist/fresh
+> ./node_modules/.bin/electron-builder --win portable -c.directories.output=dist/fresh
+> ```
+>
+> 本轮新包因此落在 `dist\fresh\win-unpacked\` 与 `dist\fresh\EggIslandPet.exe`；
+> 关掉旧进程后可以直接替换 `dist\win-unpacked\`。
+
 后台策略（藏起来之后几乎不占资源）：
 
 - 收起时主进程发 `pet-pause`，渲染层 `cancelAnimationFrame` 停掉整个主循环，
@@ -330,6 +342,39 @@ npm start
 npm run dist
 ```
 
+## 项目结构（运行时 / 生成期分开）
+
+```
+pet/
+├─ main.js            主进程：窗口、托盘、单实例、吸附物理、AI/ASR/TTS、菜单、IPC
+├─ preload.js         contextIsolation 下的安全 IPC 桥
+├─ intent.js          离线意图识别（Fuse 模糊兜底）
+├─ renderer/
+│  ├─ index.html      透明窗口 + DOM 特效层
+│  ├─ pet.js          3D 场景、原子模型切换、交互、相机、贴边探头
+│  ├─ animation.js    蛋岛原站程序化骨骼系统（GLB 本身没有 animation clip）
+│  ├─ express.js      表情 / 口型薄片 + 7 套手势
+│  ├─ cinema.js       影视级光影 + 程序化法线 / 粗糙度贴图
+│  ├─ fx3d.js         3D shader 柔光粒子
+│  ├─ oss.js          开源资源适配层
+│  └─ chat.js/html    AI 对话窗口 / 按住说话
+├─ models/            运行时 GLB + 3D 预览页
+├─ vendor/oss/        vendored 开源库源码 + 许可证原文
+├─ tools/             生成期 / 诊断期 Python 工具（见 tools/README.md）
+└─ _archive/          历史调试截图与隔离用户数据（本地备查，已 gitignore）
+```
+
+两条边界：
+
+- **`tools/` 不进安装包**。桌宠运行不需要 Python，`build.files` 只列运行时文件；
+  这些脚本只随 git 源码分发，改模型流水线才用得上。
+- **`_archive/` 是移动不是删除**。调参截图和 `PET_TEST_USERDATA` 隔离目录按日期留在本地，
+  根目录只保留当轮验收图；2026-11-08 那次归档了 291 个文件 + 29 个目录、约 352 MB。
+
+`main.js` 里 `PET_*` 开头的分支都是开发调试钩子（截图、求值、模拟点击、强制手势等），
+只有设了对应环境变量才执行，正常启动完全不进这些分支，所以没有再单独拆模块——
+拆开只会增加一层 ctx 传递，对运行时零收益。
+
 ## 实现要点（踩过的坑）
 
 1. `three.module.js` 只是个入口，真正实现在同目录 `three.core.js`，两个都得有。
@@ -503,9 +548,11 @@ npm run dist
 - **7 套手势**：比心 / 招手 / 数数 / 托腮 / 弹琴 / 摊手 / 握拳加油，
   逐节卷手指、幅度递减，首尾 0.35 秒淡入淡出；隔一阵自己来一个，
   贴边探头、连击、睡觉时不打扰。
-- **重建模型默认不贴表情层**：它现在有真骨架了，但脸是 AI 重画的、五官比例和原角色不同，
-  实测贴片会落到脸颊上。与其给一张歪脸，不如保持干净；
-  留了 `__pet.calibrateFace()` / `__pet.faceHold()` 自行校准。
+- **重建模型现在也默认开表情层**：它拿到真 `head` 骨骼后，`probeFace()` 能自动定位五官。
+  之前关掉是因为它当时还是无骨骼静态网格、贴片会落脸颊；
+  用 `PET_FACE_HOLD=1` 做 3 倍放大图逐张比对过，重建版的闭眼弧线正盖在眼睛上、嘴也在嘴上，
+  与 cake 一致。仍留了 `MODELS.rebuilt.face` 参数位和
+  `__pet.calibrateFace()` / `__pet.faceHold()` 供换模型时微调。
 
 ### 3. 自检与调试
 
@@ -542,11 +589,36 @@ npm run dist
   `{bones:47, arms:2, legs:2, head:true, hips:true, skinned:1}`。
   动作验收跑了 idle / walk / swing / wave 四组窗口截图：正面直立、无撕裂破面、
   裙摆腿脚完整、走路方向正确、秋千坐姿正常、挥手气泡正常。
-- 仍有的边界：`used joint indices 0~33`，手指骨 34~46 在骨架里但没有顶点绑上去
-  （生成模型手部没有可分离的几何），精细手指形变有限；
-  表情贴片仍默认关闭，理由同上。
 - 打包：`package.json` 的 `build.files` 已列入带骨架 GLB；`tools/` 只随 git 源码分发，
   不进运行时包 —— 这些是生成期工具，桌宠运行不需要 Python。
+
+### 5. 把「剩下的边界」也收掉：移植一双手 + 默认开表情
+
+上节留了两条尾巴，这轮都做了，而且先量数据再动手（`tools/analyze_hands.py`）：
+
+| 模型 | 手指骨 | 有权重的手指骨 | 手指骨 0.03 半径内的顶点 |
+| --- | --- | --- | --- |
+| 蛋糕纯 | 25 | **25** | 365 |
+| 珠玉纯 | 30 | **30** | 2271 |
+| 重建版（迁移后） | 25 | 0 | **0** |
+
+**先纠正一个容易搞错的结论**：cake / jade 的 47 / 52 根骨骼**全都有权重**，
+手指骨也全部绑定，7 套手势在原角色上一直是真的；缺的只有重建版。
+而重建版不是「少权重」这么简单——它**根本没有手指几何**，光补权重看不见任何东西。
+
+- 做法：在 `rig_transfer.py` 里新增 `attach_cake_hands()`，从 cake 网格里挑出
+  位于任一 `Hand*` 骨骼 0.055 半径内的顶点，只取三顶点全在区域内的三角形，
+  带着 `POSITION / NORMAL / TEXCOORD_0 / JOINTS_0 / WEIGHTS_0` 一起搬过来，
+  作为第二个 mesh 挂在 `Armature` 下、共享 `skin 0`，材质用纯肤色（不额外带贴图）。
+  结果：**490 顶点 / 372 三角面 / 25 根手指骨全有权重**，
+  整个 GLB 只从 1.89 MB 涨到 1.92 MB。
+  两份模型本来就在同一坐标系，所以手的位置不用猜。
+- 验收：把材质临时改成洋红做了可见性探针，确认手**确实渲染、确实跟着骨骼**，
+  `jointWorld×IBM - meshWorld` 仍是 `0.000000`。
+  ⚠️ **如实说明**：Q 版造型的手藏在长发和蓬蓬裙后面，303px 的桌宠窗口里
+  正面只能看到一小角，这跟 cake 原角色是一样的（不是绑定问题）。
+  想看清可以把窗口转侧面，或看洋红探针图。
+- 重建版表情 / 口型默认开启，理由和放大图校验见第 2 小节。
 
 ## 版权
 
