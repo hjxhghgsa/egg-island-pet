@@ -16,6 +16,7 @@
   "build": {
     "appId": "com.mumu.eggislandpet",
     "productName": "EggIslandPet",
+    "asar": false,
     "directories": {
       "output": "dist"
     },
