@@ -1517,22 +1517,22 @@ function tick() {
      身体转到 90°，头朝屏幕内侧，窗口里只剩下头和手。
      竖着往外推只会「露半个身子」，横过来才像扒着边沿往里看。 */
   const peekDir = peekEdge === 'left' ? -1 : 1;
-  const peekOff = peekDir * 1.52 * peekAmt;   // 推得更远：只剩脑袋，身体全在画外
-  const peekLift = 0.5 * peekAmt;
+  const peekOff = peekDir * 1.28 * peekAmt;   // 1.52 时脑袋也被切掉一半，收到 1.28 让头完整露出来
+  const peekLift = 0.22 * peekAmt;   // 抬太高头会顶到窗口上沿
   holder.position.x = walkX + peekOff + resistX;
   holder.position.y = peekLift;   // 必须赋值：+= 会每帧累加，人直接被顶出画面
-  holder.rotation.z = peekDir * 0.5 * peekAmt;   // 只歪 28°，是「歪着头」而不是躺平
+  holder.rotation.z = peekDir * 0.42 * peekAmt;   // 歪 24°
 
   // 小手扒在窗口内侧那条边上
   handsAmt += ((peekAmt > 0.15 ? 1 : 0) - handsAmt) * Math.min(1, dt * 6);
   peekingHands.visible = handsAmt > 0.03;
   if (peekingHands.visible) {
-    const hx = (peekEdge === 'left' ? -1 : 1) * 0.70;   // 贴到最边上，别压着脸
+    const hx = (peekEdge === 'left' ? -1 : 1) * 0.56;   // 手在头旁边，别飘到画外
     peekingHands.children.forEach((hand, i) => {
       // 手要贴着她脑袋的高度：她整体被抬了 peekLift，头在 ≈1.15 处
       const bob = Math.sin(t * 2.2 + i * 1.6) * 0.012;
-      hand.position.set(hx, 1.55 + i * 0.20 + bob, 0.18);
-      hand.rotation.z = (peekEdge === 'left' ? 1 : -1) * (0.55 + bob * 3);
+      hand.position.set(hx, 1.12 + i * 0.16 + bob, 0.2);
+      hand.rotation.z = (peekEdge === 'left' ? 1 : -1) * (1.15 + bob * 3);   // 手指朝下扣住边沿
       hand.scale.setScalar(0.85 + handsAmt * 0.15);
     });
   }
