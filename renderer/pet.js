@@ -1487,8 +1487,11 @@ function tick() {
     resistX *= Math.exp(-dt * 10);
   }
 
-  const peekOff = (peekEdge === 'left' ? -1 : 1) * 0.5 * peekAmt;
+  // 0.5 只是挪半个身子；要「只露一个头」，得推到 1.0 以上
+  const peekOff = (peekEdge === 'left' ? -1 : 1) * 1.02 * peekAmt;
+  const peekLift = 0.05 * peekAmt;      // 只吊一点点，抬多了会飞到窗口顶部
   holder.position.x = walkX + peekOff + resistX;
+  holder.position.y += peekLift;
 
   // 撒花：四周依次绽开，偶尔飘落花瓣
   if (act === 'bloom') {
@@ -1714,6 +1717,19 @@ function tick() {
     kbDirty = true;
   }
   if (kbDirty && t - kbLastDraw > 0.05) { kbLastDraw = t; kbDraw(); }
+
+  // 扒着屏幕边缘：双手抬到头两侧，像抠住边沿；头略低
+  if (peekAmt > 0.05 && rigReady && modelRoot) {
+    const pr = modelRoot.userData.islandRig;
+    if (pr) {
+      const k = peekAmt;
+      for (const arm of pr.arms) {
+        pitchBone(pr, arm.upper, 1.65 * k, 'z');
+        pitchBone(pr, arm.lower, 0.25 * k, 'z');
+      }
+      pitchBone(pr, pr.head, 0.18 * k, 'x');
+    }
+  }
 
   // 摆造型：抬下巴、侧头、胸口微展，两三秒后自己收回去
   if (vanity > 0.02 && act !== 'chase' && rigReady) {
