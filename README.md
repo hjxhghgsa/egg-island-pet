@@ -172,6 +172,23 @@ dist\EggIslandPet.exe                  ← 单文件，方便拷给别人 / 上�
 - **接触阴影**：脚下有一圈很淡的椭圆影子，跳起来会缩小变淡——没有影子的桌宠永远像贴在屏幕上。
 - **时段问候**：早 / 午 / 晚 / 深夜各一句话，同一个时段只说一次，重启也不会重复。
 
+### 2026-11 又扫了一遍高星项目（star 数取自当时）
+
+| 项目 | ★ | 拿走的 / 没拿的 |
+|---|---|---|
+| [BongoCat](https://github.com/ayangweb/BongoCat) | 24.5K | 键鼠输入反应（已做，只数次数不记键位）；**模型热导入没做**（要重构加载器） |
+| [Open-LLM-VTuber](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber) | 14.6K | 离线语音对话（ASR + 本地 TTS 都已做）；**摄像头视觉没做**（桌宠不需要） |
+| [live2d-widget](https://github.com/stevenjoezhang/live2d-widget) | 11K | 思路参考：轻量、零依赖 |
+| [clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk) | 6.7K | 「角色反映 AI 在干什么」——**没做**，需要接 agent 状态 |
+| [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) | 5.7K | 点击/拖拽物理（甩出去已做）；97 套手绘动画**没做**（美术量太大） |
+| Shimeji 系 | — | 甩出惯性、贴边（都已做） |
+
+这次扫完唯一补上的是「**电脑累不累**」：右键点一下，她读一遍 CPU / 内存占用说一句，
+超过 75% / 85% 会说「它有点累了」。用的是 `os.cpus()` 两次采样求差，**零依赖、不联网**。
+
+> 筛选标准：只看 Apache-2.0 / MIT 这类宽松协议、有正式 release、不需要 root 或管理员权限的项目；
+> 没有从任何仓库下可执行文件，只看了 README 与功能描述，代码全部自己写。
+
 ### 它主动做的
 
 - **护眼**：默认每 30 分钟一句「看看远处 20 秒～」，菜单可改 20 / 30 / 45 / 60 分钟或关掉

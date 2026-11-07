@@ -75,6 +75,29 @@ holder.add(spinner);
    所有星尘、连击、走路、秋千的环境光都用这一套。 */
 const sparks = createParticles(THREE, scene, 720);
 
+/* ---------------- 扒边的小手 ----------------
+   模型的袖子把手包住了，做不出「手指抠住边沿」。
+   所以在边框位置放两只小手（掌心 + 四根短手指），只在探头时出现。 */
+const peekingHands = new THREE.Group();
+peekingHands.visible = false;
+scene.add(peekingHands);
+
+const handMat = new THREE.MeshStandardMaterial({ color: 0xffd8c2, roughness: 0.72 });
+for (let i = 0; i < 2; i++) {
+  const hand = new THREE.Group();
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 10), handMat);
+  palm.scale.set(1, 0.8, 0.72);
+  hand.add(palm);
+  for (let f = 0; f < 4; f++) {
+    const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.010, 0.028, 3, 6), handMat);
+    finger.position.set((f - 1.5) * 0.027, 0.052, 0.01);
+    finger.rotation.z = (f - 1.5) * 0.14;
+    hand.add(finger);
+  }
+  peekingHands.add(hand);
+}
+let handsAmt = 0;
+
 /* ---------------- 打字键盘 ----------------
    键帽用 InstancedMesh 试过：小方块在这个尺寸下根本看不清，还容易被底板挡住。
    改成一张 Canvas 画的键盘贴图 —— 一次 draw call、键位清晰、亮键直接重绘。
@@ -1494,11 +1517,25 @@ function tick() {
      身体转到 90°，头朝屏幕内侧，窗口里只剩下头和手。
      竖着往外推只会「露半个身子」，横过来才像扒着边沿往里看。 */
   const peekDir = peekEdge === 'left' ? -1 : 1;
-  const peekOff = peekDir * 1.14 * peekAmt;
-  const peekLift = 0.56 * peekAmt;
+  const peekOff = peekDir * 1.52 * peekAmt;   // 推得更远：只剩脑袋，身体全在画外
+  const peekLift = 0.5 * peekAmt;
   holder.position.x = walkX + peekOff + resistX;
   holder.position.y = peekLift;   // 必须赋值：+= 会每帧累加，人直接被顶出画面
-  holder.rotation.z = peekDir * (Math.PI / 2) * peekAmt;
+  holder.rotation.z = peekDir * 0.5 * peekAmt;   // 只歪 28°，是「歪着头」而不是躺平
+
+  // 小手扒在窗口内侧那条边上
+  handsAmt += ((peekAmt > 0.15 ? 1 : 0) - handsAmt) * Math.min(1, dt * 6);
+  peekingHands.visible = handsAmt > 0.03;
+  if (peekingHands.visible) {
+    const hx = (peekEdge === 'left' ? -1 : 1) * 0.70;   // 贴到最边上，别压着脸
+    peekingHands.children.forEach((hand, i) => {
+      // 手要贴着她脑袋的高度：她整体被抬了 peekLift，头在 ≈1.15 处
+      const bob = Math.sin(t * 2.2 + i * 1.6) * 0.012;
+      hand.position.set(hx, 1.55 + i * 0.20 + bob, 0.18);
+      hand.rotation.z = (peekEdge === 'left' ? 1 : -1) * (0.55 + bob * 3);
+      hand.scale.setScalar(0.85 + handsAmt * 0.15);
+    });
+  }
 
   // 撒花：四周依次绽开，偶尔飘落花瓣
   if (act === 'bloom') {

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer, shell, globalShortcut, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const https = require('https');
 
 // 启动耗时排查：PET_TIMING=1 时把各阶段毫秒数写到用户目录，正常启动零开销
@@ -923,6 +924,34 @@ ipcMain.on('drag-end', () => {
 });
 
 ipcMain.handle('get-settings', () => readSettings());
+/* ---------------- 电脑累不累 ----------------
+   用 os.cpus() 的 idle/total 两次采样求差，得到真实占用；不引任何依赖。 */
+function readSystemStats() {
+  const snap = () => os.cpus().reduce((acc, c) => {
+    const t = c.times;
+    acc.idle += t.idle;
+    acc.total += t.user + t.nice + t.sys + t.idle + t.irq;
+    return acc;
+  }, { idle: 0, total: 0 });
+
+  const a = snap();
+  return new Promise((res) => {
+    setTimeout(() => {
+      const b = snap();
+      const dTotal = Math.max(1, b.total - a.total);
+      const cpu = Math.round((1 - (b.idle - a.idle) / dTotal) * 100);
+      const mem = Math.round((1 - os.freemem() / os.totalmem()) * 100);
+      res({
+        cpu: Math.max(0, Math.min(100, cpu)),
+        mem,
+        cores: os.cpus().length
+      });
+    }, 400);
+  });
+}
+
+ipcMain.handle('system-stats', () => readSystemStats());
+
 ipcMain.on('save-settings', (_e, patch) => {
   writeSettings(patch);
   // 只写盘不广播的话，改角色/画质要重启才生效（之前就是这么个坑）
@@ -1818,6 +1847,17 @@ ipcMain.on('context-menu', () => {
       click: (item) => typingSet(item.checked)
     },
     { label: '今天陪你多久', click: () => petSay(companionLine()) },
+    {
+      label: '电脑累不累',
+      click: async () => {
+        try {
+          const { cpu, mem } = await readSystemStats();
+          const hot = cpu > 75 || mem > 85;
+          petSay(hot ? `CPU ${cpu}%、内存 ${mem}%，它有点累了`
+                     : `CPU ${cpu}%、内存 ${mem}%，还撑得住`);
+        } catch { petSay('读不到机器状态'); }
+      }
+    },
     {
       label: '本地离线朗读（不吃网络）',
       type: 'checkbox',

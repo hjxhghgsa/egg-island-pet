@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('pet', {
   onVoiceDuck: (cb) => ipcRenderer.on('voice-duck', (_e, on) => cb(on)),
   onCursor: (cb) => ipcRenderer.on('cursor', (_e, d) => cb(d)),
   onTyping: (cb) => ipcRenderer.on('typing', (_e, d) => cb(d)),
+  systemStats: () => ipcRenderer.invoke('system-stats'),
   onToggleRain: (cb) => ipcRenderer.on('toggle-rain', (_e, on) => cb(on)),
   onPeek: (cb) => ipcRenderer.on('peek', (_e, edge) => cb(edge)),
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, idle) => cb(idle)),
