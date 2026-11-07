@@ -1286,15 +1286,13 @@ function tick() {
       // 落一步就在脚边冒一撮草、开一朵花 —— 一路踩出来的野花才自然
       const fx0 = 50 + walkX * 56;
       bloomFlower(fx0 + rnd(-3.5, 3.5), 0, { flower: true, scale: rnd(0.95, 1.2) });
-      // 每落一步踩一个脚印，左右脚交替
-      if (fxBack) {
-        const f = document.createElement('div');
-        f.className = 'fx-foot';
-        f.style.left = (50 + walkX * 56 + (walkStep % 2 ? 5 : -5)).toFixed(1) + '%';
-        f.style.top = '90%';
-        fxBack.appendChild(f);
-        setTimeout(() => f.remove(), 2800);
-      }
+      // 每落一步踩一个脚印，左右脚交替（用前景 #fx 层：fxBack 层早就撤掉了）
+      const f = document.createElement('div');
+      f.className = 'fx-foot';
+      f.style.left = (50 + walkX * 56 + (walkStep % 2 ? 5 : -5)).toFixed(1) + '%';
+      f.style.top = '90%';
+      fxLayer.appendChild(f);
+      setTimeout(() => f.remove(), 2800);
 
       // 脚边再补一撮纯草，不然「每一步都只蹦一朵花」还是像撒贴纸
       if (Math.random() < 0.7) {
