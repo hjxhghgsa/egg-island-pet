@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
+const { pathToFileURL } = require('url');
 
 // 开源库（源码与许可证都在 vendor/oss，见 vendor/oss/README.md）
 // bezier-easing：吸附滑行的缓动；Fuse.js 由 intent.js 懒加载，只在说指令时才进内存。
@@ -207,7 +208,8 @@ function createWindow() {
     showPet();
     const q = s.quality || 'balanced';
     win.webContents.send('apply-settings', {
-      quality: q, scale: s.scale || 1, model: s.model || 'cake', sfxOn: s.sfxOn !== false
+      quality: q, scale: s.scale || 1, model: s.model || 'cake',
+      sfxOn: s.sfxOn !== false, cinemaOn: s.cinemaOn !== false
     });
     maybeGreet();                     // 启动露脸时说一句时段问候
     bootLog('ready-to-show / first paint');
@@ -316,6 +318,67 @@ function sfxMenuItem() {
   };
 }
 
+function cinemaMenuItem() {
+  return {
+    label: '影视级光影（环境反射 + 轮廓光）',
+    type: 'checkbox',
+    checked: readSettings().cinemaOn !== false,
+    click: (item) => {
+      writeSettings({ cinemaOn: item.checked });
+      sendWin('cinema-toggle', item.checked);
+    }
+  };
+}
+
+/* 模型热导入：以前以「复杂度」为由跳过，其实 loadModel/normalize/setupCharacterRig 全都现成。
+   只支持单文件 .glb（.gltf 会带一堆外部 .bin / 贴图，拖进来容易缺件）。 */
+function customModels() {
+  const s = readSettings();
+  return Array.isArray(s.customModels) ? s.customModels : [];
+}
+
+async function importModelFlow() {
+  try {
+    const res = await dialog.showOpenDialog(win, {
+      title: '选一个自己的 GLB 模型',
+      properties: ['openFile'],
+      filters: [{ name: 'GLB 3D 模型（单文件）', extensions: ['glb'] }]
+    });
+    if (res.canceled || !res.filePaths[0]) return { ok: false, canceled: true };
+    const src = res.filePaths[0];
+    const dir = path.join(app.getPath('userData'), 'custom-models');
+    fs.mkdirSync(dir, { recursive: true });
+    const key = 'custom_' + Date.now().toString(36);
+    const dest = path.join(dir, key + '.glb');
+    fs.copyFileSync(src, dest);
+    const label = path.basename(src).replace(/\.glb$/i, '').replace(/[^\w\u4e00-\u9fa5-]/g, '_').slice(0, 12) || '我的模型';
+    const info = { key, label, file: dest, url: pathToFileURL(dest).href, height: 1.35 };
+    // 只留最近 6 个，别把用户目录堆满
+    writeSettings({ customModels: customModels().concat([info]).slice(-6), model: key });
+    sendWin('model-imported', info);
+    petSay(label + ' 来啦，换上了');
+    return { ok: true, info };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+function modelMenu(cur) {
+  const base = MODEL_MENU.map((m) => ({
+    label: m.label, type: 'radio', checked: cur === m.key,
+    click: () => { writeSettings({ model: m.key }); sendWin('switch-model', m.key); }
+  }));
+  const custom = customModels().filter((m) => m && m.key && m.url).map((m) => ({
+    label: m.label, type: 'radio', checked: cur === m.key,
+    click: () => { writeSettings({ model: m.key }); sendWin('switch-model', m.key); }
+  }));
+  const items = custom.length ? base.concat([{ type: 'separator' }], custom) : base;
+  return items.concat([
+    { type: 'separator' },
+    { label: '导入自己的模型（.glb）…', click: () => importModelFlow() }
+  ]);
+}
+
 function buildTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'icon.ico'));
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }));
@@ -340,6 +403,7 @@ function buildTray() {
       }
     },
     sfxMenuItem(),
+    cinemaMenuItem(),
     { label: '回到右下角', click: () => {
         const { workArea } = screen.getPrimaryDisplay();
         if (win) {
@@ -994,7 +1058,8 @@ ipcMain.on('save-settings', (_e, patch) => {
     quality: s.quality || 'balanced',
     scale: s.scale || 1,
     model: s.model || 'cake',
-    sfxOn: s.sfxOn !== false
+    sfxOn: s.sfxOn !== false,
+    cinemaOn: s.cinemaOn !== false
   });
 });
 
@@ -1759,7 +1824,12 @@ const ACT_MENU = [
   { key: 'wave',  label: '挥手打招呼' },
   { key: 'float', label: '飘起来' },
   { key: 'chase', label: '扑小蛋' },
-  { key: 'sleep', label: '打瞌睡' }
+  { key: 'sleep', label: '打瞌睡' },
+  { type: 'separator' },
+  { key: 'stretch', label: '伸懒腰' },
+  { key: 'hum',     label: '哼歌晃脑' },
+  { key: 'lean',    label: '歪头看你' },
+  { key: 'bow',     label: '鞠个躬' }
 ];
 
 // 菜单项点击时窗口可能已经关了，直接 send 会抛 "Render frame was disposed"
@@ -1854,10 +1924,9 @@ ipcMain.on('context-menu', () => {
     { label: '换个节目 (A)', click: () => sendWin('next-act') },
     {
       label: '待机节目',
-      submenu: ACT_MENU.map((a) => ({
-        label: a.label,
-        click: () => sendWin('set-act', a.key)
-      }))
+      submenu: ACT_MENU.map((a) => a.type === 'separator'
+        ? { type: 'separator' }
+        : { label: a.label, click: () => sendWin('set-act', a.key) })
     },
     { label: '小蛋 开 / 关 (F)', click: () => sendWin('toggle-fairy') },
     {
@@ -1867,6 +1936,7 @@ ipcMain.on('context-menu', () => {
       click: (item) => typingSet(item.checked)
     },
     sfxMenuItem(),
+    cinemaMenuItem(),
     { label: '今天陪你多久', click: () => petSay(companionLine()) },
     {
       label: '电脑累不累',
@@ -1899,18 +1969,7 @@ ipcMain.on('context-menu', () => {
       click: (item) => { petalRainOn = item.checked; sendWin('toggle-rain', petalRainOn); }
     },
     { type: 'separator' },
-    {
-      label: '换个角色',
-      submenu: MODEL_MENU.map((m) => ({
-        label: m.label,
-        type: 'radio',
-        checked: cur === m.key,
-        click: () => {
-          writeSettings({ model: m.key });
-          sendWin('switch-model', m.key);
-        }
-      }))
-    },
+    { label: '换个角色', submenu: modelMenu(cur) },
     { type: 'separator' },
     { label: '回到右下角', click: () => {
         const { workArea } = screen.getPrimaryDisplay();
@@ -1925,6 +1984,8 @@ ipcMain.on('context-menu', () => {
 });
 
 ipcMain.on('quit', () => { app.isQuitting = true; app.quit(); });
+
+ipcMain.handle('import-model', () => importModelFlow());
 
 ipcMain.handle('choose-model', async () => {
   const res = await dialog.showOpenDialog(win, {

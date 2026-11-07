@@ -3,6 +3,7 @@ import { GLTFLoader } from '../vendor/addons/loaders/GLTFLoader.js';
 import { setupCharacterRig, setupPetRig, updateRig } from './animation.js';
 import { createParticles } from './fx3d.js';
 import { easePeek, easeBloom, noise2D, playSfx, setSfxOn, ossState } from './oss.js';
+import { setupCinema, enhanceMaterial, updateCinema, setCinema, cinemaState } from './cinema.js';
 
 // 调试出口：主进程可随时读取
 window.__pet = { stage: 'boot', error: null, rev: THREE.REVISION };
@@ -13,6 +14,15 @@ window.addEventListener('unhandledrejection', (e) => {
 // 开源资源自检出口：主进程 PET_EVAL 可以直接问「四个库都活了吗」
 window.__pet.ossState = ossState;
 window.__pet.playSfx = playSfx;
+window.__pet.cinemaState = cinemaState;
+window.__pet.setCinema = setCinema;
+// 热导入链路自检：验证 file:// 绝对路径的 GLB 能被 GLTFLoader 读到（不弹对话框）
+window.__pet.testFileUrl = async (url) => {
+  try {
+    const g = await loader.loadAsync(url);
+    return { ok: true, children: g.scene.children.length };
+  } catch (e) { return { ok: false, err: String((e && e.message) || e) }; }
+};
 
 /* ---------------- 模型清单 ---------------- */
 const MODELS = {
@@ -86,6 +96,12 @@ scene.add(fill);
 const rim = new THREE.DirectionalLight(0xffe6c2, 0.6);
 rim.position.set(0, 1.6, -4.5);
 scene.add(rim);
+
+/* 影视级光影：一次性的 PMREM 环境贴图 + 会呼吸的灯。
+   材质里写了 envMapIntensity:0.8 却一直没设 envMap，这里才真正补上环境反射。 */
+const lightSet = { hemi, key, fill, rim };
+const cinemaBoot = setupCinema(THREE, scene, renderer, lightSet, true);
+window.__pet.cinemaBoot = cinemaBoot;
 
 /* ---------------- 容器 ---------------- */
 const holder = new THREE.Group();   // 承载模型，负责悬浮位移
@@ -717,7 +733,13 @@ const ACTS = [
   { name: 'wave',  min: 4,   max: 6 },
   { name: 'float', min: 5,   max: 7 },
   { name: 'chase', min: 5,   max: 7 },
-  { name: 'sleep', min: 5,   max: 7 }
+  { name: 'sleep', min: 5,   max: 7 },
+  // 四套「表演型」节目：不是多一个动作，是给动作加呼吸、重心和延迟，
+  // 用来替代「97 套手绘帧」——3D 骨骼下这才是同样的钱能买到的质感。
+  { name: 'stretch', min: 4, max: 6 },
+  { name: 'hum',     min: 5, max: 7 },
+  { name: 'lean',    min: 5, max: 7 },
+  { name: 'bow',     min: 3, max: 5 }
 ];
 
 let act = 'idle';
@@ -746,6 +768,9 @@ function enterAct(name, seconds) {
   if (name === 'walk') { walkTimer = 0; }
   if (name === 'float') { starTimer = 0; }
   if (name === 'wave') popBits('love', 5);
+  // 新表演节目配一句短台词，别默默做完动作（性格：直白、少感叹号）
+  const PERF_LINES = { stretch: '嗯——伸个懒腰', hum: '哼两句', lean: '看什么呀', bow: '请多指教' };
+  if (PERF_LINES[name]) showBubble(PERF_LINES[name], 2200);
   if (name !== 'swing') holder.rotation.z = 0;
 
   // 转完一圈自动对齐回正面
@@ -755,6 +780,64 @@ function enterAct(name, seconds) {
     lastRotateAt = performance.now();
   }
   window.__pet.act = name;
+}
+
+/* ---------------- 表演层：同样的钱，买质感而不是买张数 ----------------
+   97 套 2D 手绘帧在这个 3D 骨骼模型上会风格断裂、还会废掉旋转和贴边探头；
+   这里改成给骨骼加「次级动作」：呼吸、重心、末端延迟、头比身体慢半拍。
+   一律叠加在 updateRig 之后；贴边探头时完全不演，免得把脸压出画面。 */
+const PERF_ACTS = new Set(['stretch', 'hum', 'lean', 'bow']);
+
+function applyPerformance(rig) {
+  if (!rig || peekingNow || !PERF_ACTS.has(act)) return;
+  const ease = (x) => x * x * (3 - 2 * x);
+
+  if (act === 'stretch') {
+    // 吸气抬手 → 屏住 → 呼气放下，一轮约 6.6 秒
+    const k = ease((Math.sin(t * 0.95) + 1) * 0.5);
+    // 这只 Q 版的手藏在蓬蓬裙和长发后面，大臂抬再高也看不见，只会穿模。
+    // 所以「伸懒腰」靠看得见的地方演：整段脊柱后仰 + 抬头 + 踮脚，
+    // 手臂只给一点点侧展，别让它戳出裙摆。
+    for (const arm of rig.arms) {
+      const s = arm.side === 'Left' ? -1 : 1;
+      pitchBone(rig, arm.upper, -0.12 * k);
+      pitchBone(rig, arm.upper, s * 0.30 * k, 'z');
+      pitchBone(rig, arm.lower, -0.08 * k);
+    }
+    pitchBone(rig, rig.hips, -0.05 * k);
+    pitchBone(rig, rig.chest, -0.24 * k);
+    pitchBone(rig, rig.head, -0.17 * k);
+    spinner.position.y += 0.035 * k;          // 踮一下，整体拔高
+  } else if (act === 'hum') {
+    // 哼歌：头比身体慢半拍，手指跟着拍子轻点
+    const sway = Math.sin(t * 2.1);
+    pitchBone(rig, rig.head, sway * 0.085, 'y');
+    pitchBone(rig, rig.head, Math.sin(t * 2.1 - 0.5) * 0.035);
+    pitchBone(rig, rig.chest, sway * 0.035, 'z');
+    for (const arm of rig.arms) {
+      const ph = arm.side === 'Left' ? 0 : Math.PI;
+      pitchBone(rig, arm.lower, Math.sin(t * 4.2 + ph) * 0.06);
+      pitchBone(rig, arm.hand, Math.sin(t * 4.2 + ph + 0.7) * 0.05);
+    }
+  } else if (act === 'lean') {
+    // 歪头看你：绝不用 head 的 z 轴（会把脸转到后面只剩后脑勺），
+    // 用上半身侧倾 + 转头 + 一点点低头凑出「歪着」的感觉
+    const k = 0.55 + Math.sin(t * 0.7) * 0.12;
+    pitchBone(rig, rig.chest, 0.075 * k, 'z');
+    pitchBone(rig, rig.head, 0.10 * k, 'y');
+    pitchBone(rig, rig.head, 0.07 * k);
+    const arm = rig.arms.find((a) => a.side === 'Right') || rig.arms[0];
+    if (arm) {
+      pitchBone(rig, arm.upper, -0.42 * k);
+      pitchBone(rig, arm.lower, -0.55 * k);
+    }
+  } else if (act === 'bow') {
+    const k = ease((Math.sin(t * 1.25 - 1.0) + 1) * 0.5);
+    pitchBone(rig, rig.chest, 0.30 * k);
+    pitchBone(rig, rig.head, 0.16 * k);
+    pitchBone(rig, rig.hips, 0.06 * k);
+    for (const arm of rig.arms) pitchBone(rig, arm.upper, 0.18 * k);
+  }
 }
 
 function pickAct() {
@@ -814,6 +897,8 @@ function convertMaterial(mesh, opts) {
       mat.map.anisotropy = 8;
       mat.map.colorSpace = THREE.SRGBColorSpace;
     }
+    // 视角边缘光 + 环境反射：只在材质 shader 尾部注入一行，不改几何、不破坏透明窗
+    enhanceMaterial(mat);
     return mat;
   };
   mesh.material = Array.isArray(m) ? m.map(convert) : convert(m);
@@ -845,7 +930,8 @@ async function loadModel(modelKey, { announce = true } = {}) {
   // 原子切换：先把新模型完整加载 + 建好 rig，成功之后才摘掉旧的。
   // 旧写法是先 dispose 旧模型再 await 加载，任何一次加载抖动都会让角色整个消失，
   // 表现就是「另一个角色怎么没有了 / 用不了了」。
-  const url = new URL('../models/' + info.file, import.meta.url).href;
+  // 热导入的模型放在用户目录，由主进程给一个 file:// 绝对 URL；内置模型走相对路径
+  const url = info.url || new URL('../models/' + info.file, import.meta.url).href;
   const gltf = await loader.loadAsync(url);
   const object = gltf.scene;
 
@@ -1791,6 +1877,7 @@ function tick() {
     }
 
     softenHands(rig, act === 'wave', t);
+    applyPerformance(rig);        // 表演型节目：呼吸 / 重心 / 末端延迟
 
     // 跑起来要「颠」：只迈腿不上下起伏，看着就是在滑
     if (act === 'chase') {
@@ -1953,6 +2040,10 @@ function tick() {
   peekClipPlane.constant = 0.5 - (camBase.clipY + 0.5) * pz;
   renderer.clippingPlanes = pz > 0.02 ? PEEK_CLIP : NO_CLIP;
 
+  // 影视级光影：放歌时跟低频呼吸，连击 / 贴边探头时轮廓光加强
+  const cinemaBoost = Math.min(1, (tapCount >= 3 ? 0.5 : 0) + (peekingNow ? 0.4 : 0));
+  updateCinema(t, beat, cinemaBoost);
+
   sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算
   renderer.render(scene, camera);
 }
@@ -2003,6 +2094,13 @@ window.__pet.frames = 0;
   window.__pet.stage = 'imported';
   renderer.render(scene, camera);
   const s = (await window.pet?.getSettings()) || {};
+  setCinema(s.cinemaOn !== false);
+  // 之前导入过的模型重新登记，重启后还能直接切回来
+  for (const m of (Array.isArray(s.customModels) ? s.customModels : [])) {
+    if (m && m.key && m.url) {
+      MODELS[m.key] = { url: m.url, height: m.height || 1.35, label: m.label || '我的模型' };
+    }
+  }
   try {
     window.__pet.stage = 'loading:' + (s.model || 'cake');
     await loadModel(s.model && MODELS[s.model] ? s.model : 'cake', { announce: false });
@@ -2022,11 +2120,20 @@ window.__pet.frames = 0;
 window.pet?.onApplySettings((s) => {
   if (s.model && MODELS[s.model] && s.model !== currentKey) switchTo(s.model);
   if (typeof s.sfxOn === 'boolean') setSfxOn(s.sfxOn);
+  if (typeof s.cinemaOn === 'boolean') setCinema(s.cinemaOn);
 });
 window.pet?.onSfxToggle?.((on) => setSfxOn(on));
+window.pet?.onCinemaToggle?.((on) => setCinema(on));
 
 window.pet?.onSwitchModel((k) => {
   if (MODELS[k] && k !== currentKey) switchTo(k);
+});
+
+// 模型热导入：选完 .glb 立刻换上；走的是和内置角色完全相同的原子切换链路
+window.pet?.onModelImported?.((d) => {
+  if (!d || !d.key || !d.url) return;
+  MODELS[d.key] = { url: d.url, height: d.height || 1.35, label: d.label || '我的模型' };
+  switchTo(d.key);
 });
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });
