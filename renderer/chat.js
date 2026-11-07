@@ -220,6 +220,7 @@ async function startAsr(ev) {
     if (asrOn) $('vText').textContent = '正在热识别引擎…';
   }, 420);
   try {
+    window.pet.voiceDuck?.(true);   // 先掐音乐，别把歌录进去
     const r = await window.pet.asrStart();
     clearTimeout(slow);
     if (!r.ok) throw new Error(r.error || '识别引擎没起来');
@@ -247,6 +248,7 @@ async function startAsr(ev) {
 async function stopAsr(cancel) {
   if (!asrOn) return;
   asrOn = false;
+  window.pet.voiceDuck?.(false);
   stopMic();
   $('mic').classList.remove('rec');
   setVoiceLayer(false, false);

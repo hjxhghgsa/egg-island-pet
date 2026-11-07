@@ -1232,6 +1232,14 @@ const ACT_MENU = [
   { key: 'sleep', label: '打瞌睡' }
 ];
 
+// 菜单项点击时窗口可能已经关了，直接 send 会抛 "Render frame was disposed"
+const sendWin = (ch, ...args) => {
+  if (win && !win.isDestroyed()) win.webContents.send(ch, ...args);
+};
+
+// 按住说话期间把音乐掐掉：外放的歌会被麦克风原样录进去，识别成「放歌」指令
+ipcMain.on('voice-duck', (_e, on) => sendWin('voice-duck', !!on));
+
 ipcMain.on('context-menu', () => {
   if (!win) return;
   const cur = readSettings().model || 'cake';
@@ -1239,16 +1247,16 @@ ipcMain.on('context-menu', () => {
     { label: '和她说话', click: openChat },
     {
       label: '放首歌 / 停一下',
-      click: () => win && win.webContents.send('toggle-music')
+      click: () => sendWin('toggle-music')
     },
-    { label: '下一首', click: () => win && win.webContents.send('next-track') },
+    { label: '下一首', click: () => sendWin('next-track') },
     { label: '打开音乐文件夹', click: () => { ensureMusicDir(); shell.openPath(musicDir()); } },
     { type: 'separator' },
     {
       label: '小蛋助手',
       submenu: [
-        { label: '看看我在干嘛（截屏问 AI）', click: () => win && win.webContents.send('pet-look') },
-        { label: '复制的内容帮我看 · 自动识别', click: () => win && win.webContents.send('pet-clip') },
+        { label: '看看我在干嘛（截屏问 AI）', click: () => sendWin('pet-look') },
+        { label: '复制的内容帮我看 · 自动识别', click: () => sendWin('pet-clip') },
         { type: 'separator' },
         { label: '开始专注 25 分钟', click: startPomodoro },
         { label: '停止专注', click: () => { stopPomodoro(); petSay('好，先不计时啦'); } },
@@ -1281,15 +1289,15 @@ ipcMain.on('context-menu', () => {
       ]
     },
     { type: 'separator' },
-    { label: '换个节目 (A)', click: () => win && win.webContents.send('next-act') },
+    { label: '换个节目 (A)', click: () => sendWin('next-act') },
     {
       label: '待机节目',
       submenu: ACT_MENU.map((a) => ({
         label: a.label,
-        click: () => win && win.webContents.send('set-act', a.key)
+        click: () => sendWin('set-act', a.key)
       }))
     },
-    { label: '小蛋 开 / 关 (F)', click: () => win && win.webContents.send('toggle-fairy') },
+    { label: '小蛋 开 / 关 (F)', click: () => sendWin('toggle-fairy') },
     { type: 'separator' },
     {
       label: '换个角色',
@@ -1299,7 +1307,7 @@ ipcMain.on('context-menu', () => {
         checked: cur === m.key,
         click: () => {
           writeSettings({ model: m.key });
-          win.webContents.send('switch-model', m.key);
+          sendWin('switch-model', m.key);
         }
       }))
     },

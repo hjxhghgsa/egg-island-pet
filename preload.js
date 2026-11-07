@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('pet', {
   tts: (text) => ipcRenderer.invoke('tts', text),
   noMusic: () => ipcRenderer.send('no-music'),
   onToggleMusic: (cb) => ipcRenderer.on('toggle-music', () => cb()),
+  voiceDuck: (on) => ipcRenderer.send('voice-duck', !!on),
+  onVoiceDuck: (cb) => ipcRenderer.on('voice-duck', (_e, on) => cb(on)),
   onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),
   onSummon: (cb) => ipcRenderer.on('summon', () => cb()),
   // 窗口被收起时让 3D 渲染整体休眠，别在后台空转

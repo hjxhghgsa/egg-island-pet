@@ -95,7 +95,7 @@ for (const x of [-0.3, 0.3]) {
 }
 // 板子往后退一点，人坐在板前沿，避免从腰里穿过去
 const seat = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 0.30), woodMat);
-seat.position.set(0, SEAT_Y, -0.04);
+seat.position.set(0, SEAT_Y, 0.03);
 swingGroup.add(seat);
 
 // 蛋糕纯 hipY≈0.419、珠玉纯≈0.472，体型不一样；座板和绳长得跟着换，
@@ -1133,7 +1133,15 @@ function tick() {
   }
 
   // 散步：左右走，脚下每落一步就开一朵花
-  if (act === 'walk') {
+  // 追小精灵：真的跑起来，横跨整个窗口追，而不是站在原地转身
+  if (act === 'chase') {
+    walkX = Math.sin(t * 1.15) * 0.62;
+    walkTimer -= dt;
+    if (walkTimer <= 0) {
+      walkTimer = 0.34;
+      if (Math.random() < 0.4) popBits('star', 4);
+    }
+  } else if (act === 'walk') {
     walkTimer -= dt;
     walkX = Math.sin(t * 0.75) * 0.26;
     if (walkTimer <= 0) {
@@ -1201,7 +1209,7 @@ function tick() {
 
   spinner.position.y = baseY + bob + jumpY + floatLift + seatDrop;
   // 坐上去时身体微微往前，落在板前沿，而不是被板子从腰里穿过
-  const wantZ = act === 'swing' ? 0.08 * sitBlend : 0;
+  const wantZ = act === 'swing' ? 0.03 * sitBlend : 0;
   spinner.position.z += (wantZ - spinner.position.z) * Math.min(1, dt * 5);
   spinner.scale.set(
     1 + (1 - squash) * 0.55,
@@ -1234,6 +1242,8 @@ function tick() {
     yawVel = 0;
   }
   spinner.rotation.y = yaw;
+  // 秋千必须跟人同向转，否则一转 3D 就是「人转了、秋千还挂在背后」
+  swingGroup.rotation.y = yaw;
 
   /* 骨骼 */
   if (rigReady && modelRoot) {
@@ -1241,7 +1251,7 @@ function tick() {
     updateRig(modelRoot, {
       time: t,
       dt,
-      speed: act === 'walk' ? 0.55 : 0,
+      speed: act === 'walk' ? 0.55 : (act === 'chase' ? 1.7 : 0),
       turn: act === 'swing' ? Math.sin(t * 1.65) * 0.12 : 0,
       floating: floatAmt,
       groundHeight: 0,
@@ -1341,6 +1351,17 @@ window.pet?.onSwitchModel((k) => {
 });
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });
+// 录音时音乐暂停，录完再续上
+let duckedMusic = false;
+window.pet?.onVoiceDuck?.((on) => {
+  if (on) {
+    duckedMusic = !audio.paused;
+    if (duckedMusic) audio.pause();
+  } else if (duckedMusic) {
+    duckedMusic = false;
+    audio.play().catch(() => {});
+  }
+});
 window.pet?.onNextTrack(() => { nextTrack(); });
 
 // 被召唤出来时：蹦一下 + 转半圈
