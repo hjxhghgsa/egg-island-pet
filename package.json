@@ -24,6 +24,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "intent.js",
       "renderer/**/*",
       "vendor/**/*",
       "models/character-cake.glb",

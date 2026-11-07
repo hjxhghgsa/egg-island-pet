@@ -2,6 +2,7 @@ import * as THREE from '../vendor/three/three.module.js';
 import { GLTFLoader } from '../vendor/addons/loaders/GLTFLoader.js';
 import { setupCharacterRig, setupPetRig, updateRig } from './animation.js';
 import { createParticles } from './fx3d.js';
+import { easePeek, easeBloom, noise2D, playSfx, setSfxOn, ossState } from './oss.js';
 
 // 调试出口：主进程可随时读取
 window.__pet = { stage: 'boot', error: null, rev: THREE.REVISION };
@@ -9,6 +10,9 @@ window.addEventListener('error', (e) => { window.__pet.error = String(e.message 
 window.addEventListener('unhandledrejection', (e) => {
   window.__pet.error = String((e.reason && (e.reason.stack || e.reason.message)) || e.reason);
 });
+// 开源资源自检出口：主进程 PET_EVAL 可以直接问「四个库都活了吗」
+window.__pet.ossState = ossState;
+window.__pet.playSfx = playSfx;
 
 /* ---------------- 模型清单 ---------------- */
 const MODELS = {
@@ -516,6 +520,8 @@ function bloomFlower(xPct = 50, _yPct, opt = {}) {
 
 function petalFall(n = 5) {
   if (!fxLayer) return;
+  // simplex-noise：同一阵花瓣共享一阵「风」，飘得连贯，不再是各抖各的
+  const wind = noise2D(performance.now() * 0.00035, 0.7) * 58;
   for (let i = 0; i < n; i++) {
     const el = document.createElement('span');
     el.className = 'fx-flake';
@@ -523,7 +529,9 @@ function petalFall(n = 5) {
     el.style.left = (8 + Math.random() * 84) + '%';
     el.style.top = '-8%';
     el.style.setProperty('--s', (0.75 + Math.random() * 0.6).toFixed(2));
-    el.style.setProperty('--dx', ((Math.random() - 0.5) * 80).toFixed(0) + 'px');
+    const drift = wind + noise2D(performance.now() * 0.0005, i * 0.31) * 18
+      + (Math.random() - 0.5) * 12;
+    el.style.setProperty('--dx', drift.toFixed(0) + 'px');
     el.style.setProperty('--dur', (1.8 + Math.random() * 1.1).toFixed(2) + 's');
     el.style.setProperty('--delay', (Math.random() * 0.8).toFixed(2) + 's');
     fxLayer.appendChild(el);
@@ -1144,20 +1152,25 @@ const TAP_LINES = ['嗯？', '再戳试试', '我在想事情', '手不酸？', 
 
 // 整十连击各给一套不同的庆祝，不再每档都只是「花开啦」
 const COMBO_TIERS = {
-  10: () => { popBits('star', 30); petalFall(6); showBubble('×10', 2200); },
+  10: () => { playSfx('tier10'); popBits('star', 30); petalFall(6); showBubble('×10', 2200); },
   20: () => {
+    playSfx('tier20');
     for (let i = 0; i < 10; i++) {
-      setTimeout(() => bloomFlower(10 + i * 8, 0, { flower: true, scale: 1.15 }), i * 70);
+      // 贝塞尔错峰：先快后慢，花开得像一口气吹出去，而不是机械地每 70ms 一朵
+      setTimeout(() => bloomFlower(10 + i * 8, 0, { flower: true, scale: 1.15 }),
+        Math.round(easeBloom(i / 10) * 700));
     }
     petalFall(10);
     showBubble('×20', 2200);
   },
   30: () => {
+    playSfx('tier30');
     petalFall(20);
     popBits('petal', 44);
     showBubble('×30', 2400);
   },
   40: () => {
+    playSfx('tier40');
     for (let r = 0; r < 3; r++) {
       setTimeout(() => { popBits('star', 36); petalFall(12); }, r * 260);
     }
@@ -1179,6 +1192,8 @@ function tap() {
   tapTimer = setTimeout(() => { tapCount = 0; comboMode = false; }, COMBO_IDLE);
 
   const combo = tapCount;
+  // jsfxr 程序化音效：连击越高音越亮；走独立 AudioContext，绝不碰音乐那条链
+  playSfx(combo >= 10 ? 'combo' : 'tap', { rate: 1 + Math.min(combo, 24) * 0.018, vol: 0.9 });
   // 连击到 10 以后每一下都撒花会堆满 DOM、明显掉帧，改成只在整十档爆发
   const heavy = combo >= 10;
   popBits(combo >= 4 ? 'star' : 'love', Math.min(20, 6 + combo * 2));
@@ -1419,8 +1434,11 @@ function tick() {
     } else {
       // 慢速绕圈（约 11 秒一圈）+ 每秒 2 次的上下浮 + 一点点快速抖动
       // x 让到 0.44 才在她的肩膀外侧，之前 0.30 会正好飘在她脸颊前
-      fx = 0.44 + Math.sin(t * 0.57) * 0.10 + Math.sin(t * 3.7) * 0.008;
-      fy = 0.56 + Math.sin(t * 2.05) * 0.055 + Math.sin(t * 4.3) * 0.008;
+      // simplex-noise 给一小股连续的气流：小幅、缓慢、不会像随机抖动那样抽搐
+      fx = 0.44 + Math.sin(t * 0.57) * 0.10 + Math.sin(t * 3.7) * 0.008
+        + noise2D(t * 0.23, 1.7) * 0.016;
+      fy = 0.56 + Math.sin(t * 2.05) * 0.055 + Math.sin(t * 4.3) * 0.008
+        + noise2D(t * 0.31, 8.2) * 0.012;
       fz2 = 0.10 + Math.cos(t * 0.57) * 0.07;
 
       // 每 30~60 秒，绕她飞一整圈 —— 这就是「在旁边转来转去」
@@ -1594,7 +1612,8 @@ function tick() {
      身体落进取景框外自然消失，完整的头留在窗口里贴着屏幕那条边，
      两只小手抬到额头上方、指尖弯曲半扒着上边框。 */
   const peekDir = peekEdge === 'left' ? -1 : 1;
-  const pz = peekAmt < 0.002 ? 0 : peekAmt;    // 衰减到 0，正常取景就一帧都不碰相机
+  // bezier-easing：探头是「贴过去、软停」，不是阻尼那种一路匀速磨过去
+  const pz = peekAmt < 0.002 ? 0 : easePeek(peekAmt);
   // zoom 恒为 1，头是原始大小；只靠「镜头平移 + 裁剪面」把身体藏到门框后。
   // pz 归零后还要再跑一帧把镜头送回原位，所以守卫看的是相机高度而不是 zoom。
   if (pz > 0 || Math.abs(camera.position.y - camBase.y) > 0.001) {
@@ -2002,7 +2021,9 @@ window.__pet.frames = 0;
 
 window.pet?.onApplySettings((s) => {
   if (s.model && MODELS[s.model] && s.model !== currentKey) switchTo(s.model);
+  if (typeof s.sfxOn === 'boolean') setSfxOn(s.sfxOn);
 });
+window.pet?.onSfxToggle?.((on) => setSfxOn(on));
 
 window.pet?.onSwitchModel((k) => {
   if (MODELS[k] && k !== currentKey) switchTo(k);
@@ -2031,6 +2052,7 @@ window.pet?.onPeek?.((edge) => {
   // 所以贴边后先强制保持 6 秒，之后再由 hover 决定。
   if (peekEdge) {
     peekForceUntil = performance.now() + 6000;
+    playSfx('peek', { rate: 1.05, vol: 0.8 });
     // 如果正趴着睡 / 坐着，先把她叫起来，否则特写里只有一个后脑勺
     if (act !== 'idle') enterAct('idle', 12);
   }
@@ -2050,6 +2072,7 @@ window.pet?.onSnapCaught?.((edge) => {
   caughtEdge = edge;
   catchT = performance.now();
   caughtSaid = false;
+  playSfx('caught', { rate: 0.92, vol: 0.8 });
   showBubble(pickOne(RESIST_LINES), 1500);
   eggBounce = 1.2;
   fairySpin = 1;
@@ -2063,6 +2086,7 @@ window.pet?.onSnapFreed?.(() => {
   peekingNow = false;
   peekForceUntil = 0;
   resistX = 0;
+  playSfx('freed', { vol: 0.9 });
   showBubble(pickOne(FREED_LINES), 2400);
   jumpVel = 2.0;
   eggBounce = 1.3;

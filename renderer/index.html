@@ -306,6 +306,10 @@
     showErr(String((r && (r.stack || r.message)) || r));
   });
 </script>
+<!-- 开源库（UMD 经典脚本，必须先于 module 执行；源码和许可证都在 vendor/oss） -->
+<script src="../vendor/oss/bezier-easing/bezier-easing.js"></script>
+<script src="../vendor/oss/jsfxr/riffwave.js"></script>
+<script src="../vendor/oss/jsfxr/sfxr.js"></script>
 <script type="module" src="./pet.js"></script>
 </body>
 </html>

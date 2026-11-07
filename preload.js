@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('pet', {
   onResume: (cb) => ipcRenderer.on('pet-resume', () => cb()),
   touch: () => ipcRenderer.send('user-touch'),
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
+  onSfxToggle: (cb) => ipcRenderer.on('sfx-toggle', (_e, on) => cb(on)),
   onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k)),
   onSetAct: (cb) => ipcRenderer.on('set-act', (_e, name) => cb(name)),
   onNextAct: (cb) => ipcRenderer.on('next-act', () => cb()),

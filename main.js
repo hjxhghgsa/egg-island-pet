@@ -4,6 +4,15 @@ const fs = require('fs');
 const os = require('os');
 const https = require('https');
 
+// 开源库（源码与许可证都在 vendor/oss，见 vendor/oss/README.md）
+// bezier-easing：吸附滑行的缓动；Fuse.js 由 intent.js 懒加载，只在说指令时才进内存。
+let BezierEasing = null;
+try { BezierEasing = require('./vendor/oss/bezier-easing/bezier-easing.js'); } catch {}
+const EASE_SNAP = typeof BezierEasing === 'function'
+  ? BezierEasing(0.22, 1, 0.36, 1)
+  : (k) => k * k * (3 - 2 * k);
+const { localIntent } = require('./intent.js');
+
 // 启动耗时排查：PET_TIMING=1 时把各阶段毫秒数写到用户目录，正常启动零开销
 const BOOT_T0 = Date.now();
 function bootLog(label) {
@@ -197,7 +206,9 @@ function createWindow() {
   win.once('ready-to-show', () => {
     showPet();
     const q = s.quality || 'balanced';
-    win.webContents.send('apply-settings', { quality: q, scale: s.scale || 1, model: s.model || 'cake' });
+    win.webContents.send('apply-settings', {
+      quality: q, scale: s.scale || 1, model: s.model || 'cake', sfxOn: s.sfxOn !== false
+    });
     maybeGreet();                     // 启动露脸时说一句时段问候
     bootLog('ready-to-show / first paint');
     // 启动后就留在桌面上。不再「开完机 3 秒自己消失」——
@@ -292,6 +303,19 @@ function toggleVisible() {
   else summon();
 }
 
+// 交互音效开关：默认开，觉得吵随时关；只写设置 + 发一个 IPC，不做别的
+function sfxMenuItem() {
+  return {
+    label: '交互音效（jsfxr）',
+    type: 'checkbox',
+    checked: readSettings().sfxOn !== false,
+    click: (item) => {
+      writeSettings({ sfxOn: item.checked });
+      sendWin('sfx-toggle', item.checked);
+    }
+  };
+}
+
 function buildTray() {
   const icon = nativeImage.createFromPath(path.join(__dirname, 'icon.ico'));
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }));
@@ -315,6 +339,7 @@ function buildTray() {
         if (!item.checked) cancelAutoHide();
       }
     },
+    sfxMenuItem(),
     { label: '回到右下角', click: () => {
         const { workArea } = screen.getPrimaryDisplay();
         if (win) {
@@ -819,7 +844,7 @@ function glideTo(tx, ty, ms = 200) {
   glideTimer = setInterval(() => {
     if (!win || win.isDestroyed()) { clearInterval(glideTimer); glideTimer = null; return; }
     const k = Math.min(1, (Date.now() - t0) / ms);
-    const e = k * k * (3 - 2 * k);                 // smoothstep，起停都软
+    const e = EASE_SNAP(k);                        // bezier-easing：起步快、软停，被吸过去更自然
     win.setBounds({
       x: Math.round(sx + (tx - sx) * e),
       y: Math.round(sy + (ty - sy) * e),
@@ -968,7 +993,8 @@ ipcMain.on('save-settings', (_e, patch) => {
   sendWin('apply-settings', {
     quality: s.quality || 'balanced',
     scale: s.scale || 1,
-    model: s.model || 'cake'
+    model: s.model || 'cake',
+    sfxOn: s.sfxOn !== false
   });
 });
 
@@ -1382,22 +1408,7 @@ function asrDecode() {
   return asrDecodeAll();
 }
 
-// 本地意图识别：断网 / API 超时也必须能听懂指令。
-// 规则写得宽松一点，好容纳识别出来的同音错字（「追专住」≈「专注」）。
-function localIntent(raw) {
-  const t = String(raw || '').replace(/[\s，。！？、,.:;]/g, '');
-  const rules = [
-    [/看看屏幕|看看我在干嘛|看一眼屏幕|瞄一眼|屏幕上是什么|看.{0,3}屏幕/, 'look'],
-    [/开始专注|开启专注|番茄钟|开始.{0,4}(专|番|计时)|专注.{0,3}分钟/, 'pomodoro'],
-    [/剪贴板|复制的内容|复制了什么|我复制|复制的东西/, 'clip'],
-    [/放歌|放音乐|听歌|下一首|换首歌/, 'music'],
-    [/隐藏|收起|躲起来|先退下/, 'hide'],
-    [/换个节目|换个动作|换一套|换节目/, 'act'],
-    [/翻译|译成|用英文说|英文怎么说/, 'translate']
-  ];
-  for (const [re, action] of rules) if (re.test(t)) return action;
-  return null;
-}
+// 本地意图识别已挪到 intent.js：正则精确命中 + Fuse.js 模糊兜底，断网也能听懂指令。
 
 // 语音识别难免同音错字（「屏墓」「番切钟」）：让大模型把字改漂亮，
 // 但意图判断以本地规则为底线，AI 挂了也不影响「听懂你在下指令」。
@@ -1855,6 +1866,7 @@ ipcMain.on('context-menu', () => {
       checked: typingOn,
       click: (item) => typingSet(item.checked)
     },
+    sfxMenuItem(),
     { label: '今天陪你多久', click: () => petSay(companionLine()) },
     {
       label: '电脑累不累',
