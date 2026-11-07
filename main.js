@@ -98,9 +98,19 @@ function createWindow() {
 
   win.once('ready-to-show', () => {
     win.show();
+    win.setAlwaysOnTop(true, 'screen-saver');
     const q = s.quality || 'balanced';
     win.webContents.send('apply-settings', { quality: q, scale: s.scale || 1 });
   });
+
+  // 别的窗口抢焦点时会被压下去，这里一直抢回最上层
+  const keepTop = () => {
+    if (!win || win.isDestroyed() || !win.isVisible()) return;
+    win.setAlwaysOnTop(true, 'screen-saver');
+  };
+  win.on('blur', () => setTimeout(keepTop, 120));
+  win.on('show', () => setTimeout(keepTop, 120));
+  setInterval(keepTop, 15000);
 
   win.on('closed', () => { win = null; });
 }
