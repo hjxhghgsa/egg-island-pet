@@ -134,12 +134,17 @@ const kbGroup = new THREE.Group();
 kbGroup.visible = false;
 spinner.add(kbGroup);
 const kbMesh = new THREE.Mesh(
-  new THREE.PlaneGeometry(0.52, 0.195),
+  new THREE.PlaneGeometry(0.46, 0.17),
   new THREE.MeshBasicMaterial({ map: kbTex, transparent: true, toneMapped: false })
 );
 kbGroup.add(kbMesh);
-kbGroup.position.set(0, 0.26, 0.46);
-kbGroup.rotation.x = -0.55;
+// 键盘要「躺」在她前面：几乎水平、只朝她那边微微抬起。
+// 之前 -0.55 是把键面翻向镜头，看着像一块显示屏对着观众。
+// 相机在她眼睛高度，纯水平的键盘只会看成一条线；
+// 抬到腰上、倾 ~58°，才既不像屏幕对着观众、又能看清键面。
+// z 必须大于裙摆半径(~0.35)，否则整块键盘都会陷进裙子里只露一条边
+kbGroup.position.set(0, 0.27, 0.47);
+kbGroup.rotation.x = -0.95;
 kbDraw();
 
 function kbPoke() {
@@ -1283,7 +1288,7 @@ function tick() {
       fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
       fairy.rotation.y += (0 - fairy.rotation.y) * Math.min(1, dt * 4);
     }
-    fairyGlow.material.opacity = 0.05;
+    fairyGlow.visible = false;
     if (eggRoot) {
       eggBounce = Math.max(0, eggBounce - dt * 1.8);
       eggRoot.position.y = eggBounce * 0.09 + Math.sin(t * 2.3) * 0.012;
@@ -1341,8 +1346,9 @@ function tick() {
     walkX += (0 - walkX) * Math.min(1, dt * 6);
     const u = (t % POUNCE_CYCLE) / POUNCE_CYCLE;
     // 0 ~ .30 打量   .30 ~ .40 蹲下   .40 ~ .55 扑  .55 ~ 1 收势、互看
-    pounceCrouch = (u >= 0.30 && u < 0.42) ? Math.sin(((u - 0.30) / 0.12) * Math.PI) : 0;
-    pounceLeap = (u >= 0.42 && u < 0.56) ? Math.sin(((u - 0.42) / 0.14) * Math.PI) : 0;
+    // 蹲 1.0 秒、扑 1.4 秒 —— 之前 0.77/0.9 秒，手脚快得像快进
+    pounceCrouch = (u >= 0.26 && u < 0.42) ? Math.sin(((u - 0.26) / 0.16) * Math.PI) : 0;
+    pounceLeap = (u >= 0.42 && u < 0.64) ? Math.sin(((u - 0.42) / 0.22) * Math.PI) : 0;
     // 蹲下去那一下在脚边压出一圈尘
     if (pounceCrouch > 0.92 && pounceCrouch - dt * 6 < 0.92) {
       sparks.burst({ x: 0, y: 0.10, z: 0.06 }, {
@@ -1496,9 +1502,10 @@ function tick() {
     const rig = modelRoot.userData.islandRig;
     // 蹲伏蓄力：膝盖弯下去
     if (act === 'chase' && pounceCrouch > 0.02) {
+      const c = pounceCrouch * pounceCrouch * (3 - 2 * pounceCrouch);
       for (const leg of rig.legs) {
-        pitchBone(rig, leg.upper, 0.42 * pounceCrouch);
-        pitchBone(rig, leg.lower, -0.68 * pounceCrouch);
+        pitchBone(rig, leg.upper, 0.26 * c);
+        pitchBone(rig, leg.lower, -0.42 * c);
       }
     }
 
@@ -1544,21 +1551,16 @@ function tick() {
 
     // 打字反应：这个模型手藏在蓬蓬裙后面，抬手只会看着像「指人」，
     // 所以改成跟着敲字节奏轻轻点头 + 身体微颤 —— 反而更像「她在跟着你打字」。
-    if (typingHeat > 0.02 && !dragging) {
-      // 以前是「每按一个键抖一下头」，8 次/秒看着像抽搐。
-      // 现在改成 4.5Hz 的极轻起伏 + 一点点低头，像安静地在看屏幕。
-      const ph = t * 4.5;
-      const lean = Math.min(1, typingHeat);
-      pitchBone(rig, rig.head, (0.045 + Math.sin(ph) * 0.012) * lean, 'x');
-      pitchBone(rig, rig.chest, (0.02 + Math.sin(ph + 0.8) * 0.008) * lean, 'x');
-    }
+    // 打字时不加任何身体动作（用户明确要求）：只有键盘在亮，人是静着的。
+
 
     // 扑击：两条胳膊一起往前伸，抓空了再收回来
     if (act === 'chase' && pounceLeap > 0.02) {
-      const reach = pounceLeap;
+      // 缓动一下再伸：直接跟正弦走，起手那一下会像甩出去
+      const reach = pounceLeap * pounceLeap * (3 - 2 * pounceLeap);
       for (const arm of rig.arms) {
-        pitchBone(rig, arm.upper, 1.35 * reach, 'z');
-        pitchBone(rig, arm.lower, 0.5 * reach, 'z');
+        pitchBone(rig, arm.upper, 0.95 * reach, 'z');
+        pitchBone(rig, arm.lower, 0.35 * reach, 'z');
       }
     }
 
@@ -1620,18 +1622,6 @@ function tick() {
   }
   if (kbDirty && t - kbLastDraw > 0.05) { kbLastDraw = t; kbDraw(); }
 
-  // 打字时每 0.7 秒在身前飘一颗小星
-  if (typingHeat > 0.3) {
-    typeFxTimer -= dt;
-    if (typeFxTimer <= 0) {
-      typeFxTimer = 0.6 + Math.random() * 0.5;
-      sparks.burst({ x: rnd(-0.18, 0.18), y: 0.72, z: 0.22 }, {
-        n: 2, colors: ['#fff2c4', '#ffd9ee'], speed: 0.25, up: 0.8,
-        sizeMin: 4, sizeMax: 7, lifeMin: 0.5, lifeMax: 0.9
-      });
-    }
-  }
-
   // 摆造型：抬下巴、侧头、胸口微展，两三秒后自己收回去
   if (vanity > 0.02 && act !== 'chase' && rigReady) {
     const vr = modelRoot && modelRoot.userData.islandRig;
@@ -1642,13 +1632,8 @@ function tick() {
     }
   }
 
-  // 敲击只留极轻的呼吸起伏，不做「一下一下」的弹跳（那是抽搐感的来源）
-  typeHit *= Math.exp(-dt * 6);
-  if (typingHeat > 0.02) {
-    const breathe = Math.sin(t * 2.1) * 0.004 * Math.min(1, typingHeat);
-    squash *= 1 - breathe;
-    spinner.position.y += breathe * 0.6;
-  }
+  // 打字期间不做任何躯体动作，避免抽搐感
+  typeHit = 0;
 
   // 停止打字后 0.4 秒放开
   if (typingHeat > 0 && performance.now() - typingAt > 400) {
