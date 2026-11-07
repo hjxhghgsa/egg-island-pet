@@ -217,6 +217,11 @@ function createWindow() {
   }, 60000);
   if (topGuard.unref) topGuard.unref();
 
+  // 调试：PET_DEBUG=1 把渲染进程的 console（含 shader 编译错误）打到主进程 stdout
+  if (process.env.PET_DEBUG) {
+    win.webContents.on('console-message', (_e, lvl, msg) => console.log('[wc]', msg));
+  }
+
   win.on('closed', () => { win = null; });
 }
 
@@ -423,6 +428,17 @@ app.whenReady().then(async () => {
       app.isQuitting = true; app.quit();
     }, 2000);
   }
+  // 调试：PET_EVAL="表达式" 在渲染进程里跑一段 JS 并把结果打出来
+  if (process.env.PET_EVAL) {
+    setTimeout(async () => {
+      try {
+        const r = await win.webContents.executeJavaScript(`(async () => String(await (${process.env.PET_EVAL})))()`);
+        console.log('[eval]', r);
+      } catch (e) { console.log('[eval err]', e.message); }
+      app.isQuitting = true; app.quit();
+    }, 5000);
+  }
+
   // 调试：PET_CLICK=1 模拟连续点击，验证单点/双击/连击识别
   if (process.env.PET_CLICK) {
     setTimeout(async () => {

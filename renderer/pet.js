@@ -1,6 +1,7 @@
 import * as THREE from '../vendor/three/three.module.js';
 import { GLTFLoader } from '../vendor/addons/loaders/GLTFLoader.js';
 import { setupCharacterRig, setupPetRig, updateRig } from './animation.js';
+import { createParticles } from './fx3d.js';
 
 // 调试出口：主进程可随时读取
 window.__pet = { stage: 'boot', error: null, rev: THREE.REVISION };
@@ -66,6 +67,11 @@ scene.add(holder);
 
 const spinner = new THREE.Group();  // 负责朝向摆动
 holder.add(spinner);
+
+/* ---------------- 3D 柔光粒子 ----------------
+   照蛋岛原站星星 shader 的思路写的软核 + 星芒粒子，替换掉之前的 CSS 圆点。
+   所有星尘、连击、走路、秋千的环境光都用这一套。 */
+const sparks = createParticles(THREE, scene, 720);
 
 /* ---------------- 秋千道具 ---------------- */
 const swingGroup = new THREE.Group();
@@ -189,42 +195,45 @@ const SPARK_COLORS = {
   zzz:   ['#afbeff', '#cebeff', '#b8c6ff']
 };
 
-// ClickSpark 式放射星尘：从一点均匀散开，带轻微上飘和随机抖动
+// 点击 / 连击的星尘：直接在世界里放一撮 3D 粒子（软核 + 星芒），
+// 不再用 DOM 圆点 —— 那东西在透明窗口里就是一片小圆斑。
 function popBits(kind = 'love', n = 9) {
-  if (!fxLayer) return;
-  const isText = kind === 'zzz';
   const colors = SPARK_COLORS[kind] || SPARK_COLORS.love;
-  const set = BIT_SETS[kind] || BIT_SETS.love;
-  const ox = 48 + (Math.random() - 0.5) * 10;
-  const oy = isText ? 30 : 44 + (Math.random() - 0.5) * 10;
 
-  for (let i = 0; i < n; i++) {
-    const el = document.createElement('span');
-    if (isText) {
+  // 睡着时的 Z 还得用文字，粒子画不出字母
+  if (kind === 'zzz') {
+    if (!fxLayer) return;
+    const set = BIT_SETS.zzz;
+    for (let i = 0; i < Math.min(5, n); i++) {
+      const el = document.createElement('span');
       el.className = 'fx-bit';
       el.textContent = set.chars[i % set.chars.length];
       el.style.color = colors[i % colors.length];
       el.style.fontSize = (13 + Math.random() * 9).toFixed(0) + 'px';
-      el.style.setProperty('--dx', ((Math.random() - 0.5) * 60).toFixed(0) + 'px');
+      el.style.left = (44 + Math.random() * 12).toFixed(1) + '%';
+      el.style.top = (28 + Math.random() * 8).toFixed(1) + '%';
+      el.style.setProperty('--dx', ((Math.random() - 0.5) * 40).toFixed(0) + 'px');
       el.style.setProperty('--dy', (-40 - Math.random() * 50).toFixed(0) + 'px');
-      el.style.setProperty('--rot', ((Math.random() - 0.5) * 50).toFixed(0) + 'deg');
-    } else {
-      el.className = 'fx-spark';
-      const a = (Math.PI * 2 * i) / n + (Math.random() - 0.5) * 0.5;
-      const d = 34 + Math.random() * 46;
-      el.style.setProperty('--c', colors[i % colors.length]);
-      el.style.setProperty('--sz', (8 + Math.random() * 6).toFixed(1) + 'px');
-      el.style.setProperty('--dx', (Math.cos(a) * d).toFixed(0) + 'px');
-      el.style.setProperty('--dy', (Math.sin(a) * d - 16 - Math.random() * 14).toFixed(0) + 'px');
-      el.style.setProperty('--rot', ((Math.random() - 0.5) * 120).toFixed(0) + 'deg');
+      el.style.setProperty('--rot', ((Math.random() - 0.5) * 40).toFixed(0) + 'deg');
+      el.style.setProperty('--dur', (1.1 + Math.random() * 0.5).toFixed(2) + 's');
+      el.style.setProperty('--delay', (Math.random() * 0.2).toFixed(2) + 's');
+      fxLayer.appendChild(el);
+      setTimeout(() => el.remove(), 2400);
     }
-    el.style.left = (ox + (Math.random() - 0.5) * 12).toFixed(1) + '%';
-    el.style.top = (oy + (Math.random() - 0.5) * 12).toFixed(1) + '%';
-    el.style.setProperty('--dur', (0.85 + Math.random() * 0.55).toFixed(2) + 's');
-    el.style.setProperty('--delay', (Math.random() * 0.16).toFixed(2) + 's');
-    fxLayer.appendChild(el);
-    setTimeout(() => el.remove(), 2100);
+    return;
   }
+
+  sparks.burst({ x: 0, y: 0.84, z: 0.2 }, {
+    n: Math.min(46, Math.round(n * 2.2)),
+    colors,
+    speed: kind === 'star' ? 1.35 : 1.05,
+    up: 0.62,
+    jitter: 0.22,
+    sizeMin: 6,
+    sizeMax: 14,
+    lifeMin: 0.45,
+    lifeMax: 1.0
+  });
 }
 
 /* 地面花草：先冒草 → 抽茎 → 长叶 → 开花。
@@ -517,7 +526,8 @@ let squash = 1;          // 落地压缩
 let yaw = 0;             // 手动旋转角（360° 自由转）
 let yawVel = 0;          // 旋转惯性
 let sitBlend = 0;        // 坐姿骨骼过渡
-let swingFxTimer = 0;    // 荡秋千时飘花瓣 / 星光的节奏
+let swingFxTimer = 0;
+let ambientTimer = 0.6;    // 荡秋千时飘花瓣 / 星光的节奏
 let seatHipY = 0.472;    // 当前角色的髋部高度，换角色后重算座板
 let lastRotateAt = 0;    // 最后一次手动转的时间
 const TAU = Math.PI * 2;
@@ -1009,6 +1019,32 @@ window.addEventListener('dblclick', (ev) => {
 });
 
 window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
+window.__THREE = THREE;
+window.__pet.spark = (n) => { popBits('star', n || 20); return 'ok'; };
+window.__pet.fxDebug = () => {
+  const g = sparks.points.geometry;
+  const st = g.attributes.aStart.array;
+  let live = 0, maxStart = -1e9;
+  for (let i = 0; i < st.length; i++) { if (st[i] > -100) live++; if (st[i] > maxStart) maxStart = st[i]; }
+  const prog = sparks.material.program;
+  return JSON.stringify({
+    inScene: !!sparks.points.parent,
+    visible: sparks.points.visible,
+    attrSizes: Object.keys(g.attributes),
+    live, maxStart,
+    uTime: sparks.material.uniforms.uTime.value,
+    t,
+    drawRange: g.drawRange.count,
+    compiled: !!(prog && prog.diagnostics),
+    render: JSON.parse(JSON.stringify(renderer.info.render)),
+    blending: sparks.material.blending,
+    depthTest: sparks.material.depthTest,
+    transparent: sparks.material.transparent,
+    diag: prog && prog.diagnostics ? String(prog.diagnostics.programLog || '').slice(0, 400) : null,
+    pos0: Array.from(g.attributes.position.array.slice(0, 6)),
+    size0: Array.from(g.attributes.aSize.array.slice(0, 4))
+  });
+};
 
 /* ---------------- 尺寸 ---------------- */
 function resize() {
@@ -1017,6 +1053,7 @@ function resize() {
   const w = Math.max(120, Math.min(window.innerWidth || 200, 400));
   const h = Math.max(120, Math.min(window.innerHeight || 200, 400));
   renderer.setSize(w, h, false);
+  sparks.resize(h);                     // 点尺寸跟着窗口走，不然小窗里粒子会糊成大团
   camera.aspect = 1;
   camera.updateProjectionMatrix();
 }
@@ -1074,6 +1111,18 @@ function tick() {
     else pickAct();
   }
 
+  /* 身边的环境光：不管在干什么都偶尔飘几颗，别让画面死气沉沉 */
+  ambientTimer -= dt;
+  if (ambientTimer <= 0) {
+    ambientTimer = 0.75 + Math.random() * 1.3;
+    sparks.burst({ x: rnd(-0.3, 0.3), y: rnd(0.15, 0.9), z: 0.16 }, {
+      n: 1 + (Math.random() < 0.35 ? 1 : 0),
+      colors: ['#fff2c4', '#ffd9ee', '#d8e8ff'],
+      speed: 0.14, up: 1, jitter: 0.18,
+      sizeMin: 4, sizeMax: 8, lifeMin: 1.4, lifeMax: 2.6
+    });
+  }
+
   /* 小精灵：绕着角色飞，扇翅膀 + 拖尾光点 */
   fairy.visible = fairyOn;
   for (const s of fairyTrail) s.visible = fairyOn;
@@ -1122,8 +1171,11 @@ function tick() {
     swingFxTimer -= dt;
     if (swingFxTimer <= 0) {
       petalFall(1);
-      if (Math.random() < 0.4) popBits('star', 2);
-      swingFxTimer = 1.2 + Math.random() * 1.3;
+      sparks.burst({ x: rnd(-0.35, 0.35), y: rnd(0.35, 1.0), z: 0.1 }, {
+        n: 4, colors: ['#ffe9a8', '#ffd7f0', '#cfe4ff'], speed: 0.22, up: 0.9,
+        sizeMin: 5, sizeMax: 9, lifeMin: 1.2, lifeMax: 2.2
+      });
+      swingFxTimer = 1.0 + Math.random() * 1.1;
     }
   } else {
     holder.rotation.z += (0 - holder.rotation.z) * Math.min(1, dt * 5);
@@ -1138,8 +1190,13 @@ function tick() {
     walkX = Math.sin(t * 1.15) * 0.62;
     walkTimer -= dt;
     if (walkTimer <= 0) {
-      walkTimer = 0.34;
-      if (Math.random() < 0.4) popBits('star', 4);
+      walkTimer = 0.30;
+      // 跑过的地方留一串向后甩的星尘
+      sparks.burst({ x: walkX, y: 0.18, z: 0.05 }, {
+        n: 4, colors: ['#ffe48c', '#fff6cf', '#ffbade'], speed: 0.35,
+        dir: { x: -Math.sign(Math.cos(t * 1.15)) * 0.7, y: 0.25, z: 0 },
+        up: 0.7, sizeMin: 5, sizeMax: 10, lifeMin: 0.35, lifeMax: 0.75
+      });
     }
   } else if (act === 'walk') {
     walkTimer -= dt;
@@ -1277,6 +1334,7 @@ function tick() {
     modelRoot.updateWorldMatrix(true, true);
   }
 
+  sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算
   renderer.render(scene, camera);
 }
 
