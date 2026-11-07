@@ -263,7 +263,8 @@
     /* backdrop-filter 在透明窗口里会在角色头后糊出一块黑斑，改用不透明度更高的渐变 */
     background: linear-gradient(180deg, rgba(255,255,255,.93), rgba(255,246,252,.87));
     border: 1px solid rgba(255,255,255,.82);
-    box-shadow: 0 6px 26px rgba(188,116,158,.22),
+    /* 26px 的大模糊在透明窗口上会露出一圈彩色色带（截图里像彩虹环），收到 8px */
+    box-shadow: 0 2px 8px rgba(188,116,158,.20),
                 inset 0 1px 0 rgba(255,255,255,.92),
                 inset 0 -1px 0 rgba(255,255,255,.35);
   }

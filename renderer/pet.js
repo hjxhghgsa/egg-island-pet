@@ -1466,8 +1466,29 @@ function tick() {
   const peekWant = canPeek ? 1 : 0;
   peekAmt += (peekWant - peekAmt) * Math.min(1, dt * 5);
   // 探头幅度加大到 0.5：0.34 只够挪 50px，看着像"没动"
+  // 被吸住的前 0.65 秒：往窗口里挣（连抖带缩），然后才被拖出去
+  let resistTilt = 0;
+  if (caughtEdge) {
+    const k = (performance.now() - catchT) / 1000;
+    const inward = caughtEdge === 'left' ? 1 : -1;
+    if (k < 0.65) {
+      const decay = 1 - k / 0.65;
+      resistX = Math.sin(k * 26) * 0.105 * decay * inward;   // 幅度加大，挣扎才看得见
+      resistTilt = -inward * 0.14 * Math.sin(k * 26) * decay;
+    } else {
+      resistX *= Math.exp(-dt * 10);
+    }
+    if (k > 1.0 && !caughtSaid) {
+      caughtSaid = true;
+      showBubble(pickOne(CAUGHT_LINES), 3400);
+    }
+    if (k > 8) caughtEdge = null;
+  } else {
+    resistX *= Math.exp(-dt * 10);
+  }
+
   const peekOff = (peekEdge === 'left' ? -1 : 1) * 0.5 * peekAmt;
-  holder.position.x = walkX + peekOff;
+  holder.position.x = walkX + peekOff + resistX;
 
   // 撒花：四周依次绽开，偶尔飘落花瓣
   if (act === 'bloom') {
@@ -1737,6 +1758,8 @@ function tick() {
     spinner.rotation.z = Math.sin(t * 6.4) * beat * 0.07;
   }
 
+  if (Math.abs(resistTilt) > 0.001) spinner.rotation.z += resistTilt;
+
   // 被拎起来时整个身子跟着晃，松手回正
   if (movingWin) {
     dragTilt += Math.sin(t * 9) * 0.004;                 // 一点点自然摆动
@@ -1841,6 +1864,39 @@ window.pet?.onPeek?.((edge) => {
   // 松手时光标还在她身上（hovering=true）会立刻取消探头，
   // 所以贴边后先强制保持 6 秒，之后再由 hover 决定。
   if (peekEdge) peekForceUntil = performance.now() + 6000;
+});
+
+// 被吸住 → 挣扎 → 被拽进去 → 探头；拖出来 → 获救
+const RESIST_LINES = ['诶诶诶…', '别拽我', '等一下！', '我还没准备好', '慢着慢着'];
+const CAUGHT_LINES = ['放我出去…', '这里好挤', '让我回桌上', '出不去了'];
+const FREED_LINES = ['又见到你了', '还是外面舒服', '呼…差点出不来', '下次别拽那么狠'];
+let caughtEdge = null;
+let catchT = 0;
+let caughtSaid = false;
+let resistX = 0;
+
+window.pet?.onSnapCaught?.((edge) => {
+  if (!edge) return;
+  caughtEdge = edge;
+  catchT = performance.now();
+  caughtSaid = false;
+  showBubble(pickOne(RESIST_LINES), 1500);
+  eggBounce = 1.2;
+  fairySpin = 1;
+});
+
+window.pet?.onSnapFreed?.(() => {
+  if (!caughtEdge) return;
+  caughtEdge = null;
+  resistX = 0;
+  showBubble(pickOne(FREED_LINES), 2400);
+  jumpVel = 2.0;
+  eggBounce = 1.3;
+  fairySpin = 1;
+  sparks.burst({ x: 0, y: 0.6, z: 0.2 }, {
+    n: 6, colors: ['#ffe9f4', '#ffe6a8'], speed: 0.7, up: 0.7,
+    sizeMin: 4, sizeMax: 9, lifeMin: 0.4, lifeMax: 0.9
+  });
 });
 
 // 拖动中靠近边缘：先亮一条提示，让人知道"会被吸住"

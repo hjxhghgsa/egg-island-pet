@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('pet', {
   onPeek: (cb) => ipcRenderer.on('peek', (_e, edge) => cb(edge)),
   onUserIdle: (cb) => ipcRenderer.on('user-idle', (_e, idle) => cb(idle)),
   onNearEdge: (cb) => ipcRenderer.on('near-edge', (_e, edge) => cb(edge)),
+  onSnapCaught: (cb) => ipcRenderer.on('snap-caught', (_e, edge) => cb(edge)),
+  onSnapFreed: (cb) => ipcRenderer.on('snap-freed', () => cb()),
   onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),
   onSummon: (cb) => ipcRenderer.on('summon', () => cb()),
   // 窗口被收起时让 3D 渲染整体休眠，别在后台空转

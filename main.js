@@ -503,7 +503,9 @@ app.whenReady().then(async () => {
         const x = process.env.PET_EDGE === 'left' ? area.x : area.x + area.width - WIN_W;
         win.setBounds({ x, y: b.y, width: WIN_W, height: WIN_H });
         sendWin('near-edge', process.env.PET_EDGE);
-        sendWin('peek', process.env.PET_EDGE);
+        sendWin('snap-caught', process.env.PET_EDGE);
+        setTimeout(() => sendWin('peek', process.env.PET_EDGE), 700);
+        if (process.env.PET_FREED) setTimeout(() => sendWin('snap-freed', true), 4000);
         console.log('[edge-test]', process.env.PET_EDGE, x);
       } catch (e) { console.log('[edge-test fail]', e.message); }
     }, 5000);
@@ -753,6 +755,7 @@ let flingTimer = null;
 ipcMain.on('drag-start', () => {
   if (!win) return;
   sendWin('peek', null);
+  sendWin('snap-freed', true);
   stopFling();
   stopGlide();
   const cursor = screen.getCursorScreenPoint();
@@ -848,8 +851,9 @@ function snapToEdge() {
   if (process.env.PET_DEBUG) console.log('[snap]', JSON.stringify({ edge, from: [b.x, b.y], to: [tx, ty] }));
   if (tx === b.x && ty === b.y) { writeSettings({ x: b.x, y: b.y }); return; }
   glideTo(tx, ty);
-  // 贴到左右边就探出头看她，贴上下边就正常站着
-  setTimeout(() => sendWin('peek', edge), 220);
+  // 先演「被吸住 / 挣扎」，再探头
+  sendWin('snap-caught', edge);
+  setTimeout(() => sendWin('peek', edge), 700);
 }
 
 function stopFling() {
