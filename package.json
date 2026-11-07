@@ -1,0 +1,44 @@
+{
+  "name": "egg-island-pet",
+  "version": "1.0.0",
+  "description": "蛋岛桌面宠物 - 蛋糕纯 / 珠玉纯",
+  "main": "main.js",
+  "author": "mumu",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.mumu.eggislandpet",
+    "productName": "EggIslandPet",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "vendor/**/*",
+      "models/**/*",
+      "icon.ico",
+      "icon.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.ico"
+    },
+    "portable": {
+      "artifactName": "EggIslandPet.exe"
+    }
+  }
+}

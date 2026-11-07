@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>蛋岛宠物</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: transparent;
+    -webkit-user-select: none; user-select: none;
+    cursor: default;
+  }
+  #stage { width: 100%; height: 100%; display: block; }
+  #err {
+    position: fixed; inset: 0; display: none; padding: 14px;
+    font: 11px/1.5 "Microsoft YaHei", monospace;
+    color: #7a3020; background: rgba(255,246,240,.96);
+    white-space: pre-wrap; overflow: auto;
+  }
+  #err.show { display: block; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="err"></div>
+<script>
+  // 加载失败时把错误显示在窗口里，别白屏
+  function showErr(msg) {
+    var el = document.getElementById('err');
+    el.textContent = '出错了：\n' + msg;
+    el.classList.add('show');
+  }
+  window.addEventListener('error', function (e) {
+    showErr((e.message || '') + '\n' + (e.filename || '') + ':' + (e.lineno || ''));
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    showErr(String((r && (r.stack || r.message)) || r));
+  });
+</script>
+<script type="module" src="./pet.js"></script>
+</body>
+</html>
