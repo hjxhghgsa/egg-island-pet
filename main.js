@@ -11,6 +11,14 @@ app.commandLine.appendSwitch('allow-file-access-from-files');
 // 开发跑和打包跑的用户目录统一，歌单/设置才能共用
 app.setPath('userData', path.join(app.getPath('appData'), 'EggIslandPet'));
 
+// 只允许一个实例；重复双击就召唤已有的那只
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { summon(); });
+}
+
 // three.module.js 只是个入口，真正的实现在同目录的 three.core.js。
 // 缺了就补一次，之后走本地，永久离线。
 const THREE_DIR = path.join(__dirname, 'vendor', 'three');
