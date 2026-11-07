@@ -1174,7 +1174,10 @@ window.addEventListener('dblclick', (ev) => {
 window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
 window.__pet.peekState = () => JSON.stringify({
   peekEdge, peekAmt: +peekAmt.toFixed(2), hovering,
-  holderX: +holder.position.x.toFixed(3), canvasW: innerWidth
+  holderX: +holder.position.x.toFixed(3),
+  holderY: +holder.position.y.toFixed(3),
+  holderRotZ: +holder.rotation.z.toFixed(2),
+  canvasW: innerWidth
 });
 
 window.__pet.fairyPos = () => [
@@ -1487,11 +1490,15 @@ function tick() {
     resistX *= Math.exp(-dt * 10);
   }
 
-  // 0.5 只是挪半个身子；要「只露一个头」，得推到 1.0 以上
-  const peekOff = (peekEdge === 'left' ? -1 : 1) * 1.02 * peekAmt;
-  const peekLift = 0.05 * peekAmt;      // 只吊一点点，抬多了会飞到窗口顶部
+  /* 探头 = 整个人横过来挂在屏幕边沿：
+     身体转到 90°，头朝屏幕内侧，窗口里只剩下头和手。
+     竖着往外推只会「露半个身子」，横过来才像扒着边沿往里看。 */
+  const peekDir = peekEdge === 'left' ? -1 : 1;
+  const peekOff = peekDir * 1.14 * peekAmt;
+  const peekLift = 0.56 * peekAmt;
   holder.position.x = walkX + peekOff + resistX;
-  holder.position.y += peekLift;
+  holder.position.y = peekLift;   // 必须赋值：+= 会每帧累加，人直接被顶出画面
+  holder.rotation.z = peekDir * (Math.PI / 2) * peekAmt;
 
   // 撒花：四周依次绽开，偶尔飘落花瓣
   if (act === 'bloom') {
