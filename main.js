@@ -1561,6 +1561,24 @@ const sendWin = (ch, ...args) => {
 ipcMain.on('voice-duck', (_e, on) => sendWin('voice-duck', !!on));
 
 
+/* 用户离开 / 回来：powerMonitor.getSystemIdleTime() 是系统级闲置秒数，
+   不需要任何键盘钩子，也拿不到任何输入内容。闲置 3 分钟她就趴下打瞌睡，
+   你一动鼠标/键盘她就醒。 */
+let userAway = false;
+setInterval(() => {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  try {
+    const idleSec = require('electron').powerMonitor.getSystemIdleTime();
+    if (!userAway && idleSec > 180) {
+      userAway = true;
+      sendWin('user-idle', true);
+    } else if (userAway && idleSec < 3) {
+      userAway = false;
+      sendWin('user-idle', false);
+    }
+  } catch {}
+}, 15000);
+
 // 视线跟随：把她窗口里的相对鼠标位置发过去，渲染层让头微微转过来。
 // 120ms 一次足够了 —— 每帧发就是白白吵醒渲染层。
 setInterval(() => {

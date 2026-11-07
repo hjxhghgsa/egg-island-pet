@@ -142,9 +142,22 @@ kbGroup.add(kbMesh);
 // 之前 -0.55 是把键面翻向镜头，看着像一块显示屏对着观众。
 // 相机在她眼睛高度，纯水平的键盘只会看成一条线；
 // 抬到腰上、倾 ~58°，才既不像屏幕对着观众、又能看清键面。
-// z 必须大于裙摆半径(~0.35)，否则整块键盘都会陷进裙子里只露一条边
-kbGroup.position.set(0, 0.27, 0.47);
-kbGroup.rotation.x = -0.95;
+// 键面必须朝上偏她那一侧（rotation 越接近 -PI/2 越水平），
+// 之前 -0.95 还是把键面斜向镜头，看起来就像屏幕冲着你。
+// 纯水平 → 一条线；纯倾斜 → 像屏幕。折中：绕 Y 侧转 ~27°，从斜上方看到键面
+kbGroup.position.set(0.02, 0.27, 0.42);
+// 绕 Y 多转一些（~54°），它就成了一个斜放的平行四边形，
+// 一眼能看出是「躺着的物件」而不是正对你的屏幕
+kbGroup.rotation.y = 0.95;
+kbGroup.rotation.x = -0.72;
+
+// 给键盘加一点厚度，侧看才不会像一张纸
+const kbBody = new THREE.Mesh(
+  new THREE.BoxGeometry(0.44, 0.016, 0.165),
+  new THREE.MeshStandardMaterial({ color: 0x3a3344, roughness: 0.6, metalness: 0.12 })
+);
+kbBody.position.z = -0.006;
+kbGroup.add(kbBody);
 kbDraw();
 
 function kbPoke() {
@@ -1300,9 +1313,10 @@ function tick() {
       fairy.rotation.y = pounceLeap * 1.6 + Math.sin(t * 1.3) * 0.1;
     } else {
       // 慢速绕圈（约 11 秒一圈）+ 每秒 2 次的上下浮 + 一点点快速抖动
-      fx = 0.30 + Math.sin(t * 0.57) * 0.17 + Math.sin(t * 3.7) * 0.010;
-      fy = 0.64 + Math.sin(t * 2.05) * 0.055 + Math.sin(t * 4.3) * 0.008;
-      fz2 = 0.20 + Math.cos(t * 0.57) * 0.09;
+      // x 让到 0.44 才在她的肩膀外侧，之前 0.30 会正好飘在她脸颊前
+      fx = 0.44 + Math.sin(t * 0.57) * 0.10 + Math.sin(t * 3.7) * 0.008;
+      fy = 0.56 + Math.sin(t * 2.05) * 0.055 + Math.sin(t * 4.3) * 0.008;
+      fz2 = 0.10 + Math.cos(t * 0.57) * 0.07;
 
       // 每 30~60 秒，绕她飞一整圈 —— 这就是「在旁边转来转去」
       orbitWait -= dt;
@@ -1542,8 +1556,8 @@ function tick() {
     updateRig(modelRoot, {
       time: t,
       dt,
-      // run 系数是 clamp((speed-3.7)/3)，1.7 永远触发不了跑步幅度，等于快走
-      speed: act === 'walk' ? 0.55 : (act === 'chase' ? 5.2 : 0),
+      // 追小蛋是「原地蹲—扑」，不该有行走循环：给 5.2 时腿一直在跑（用户看到的"脚乱动"）
+      speed: act === 'walk' ? 0.55 : 0,
       turn: act === 'swing' ? Math.sin(t * 1.65) * 0.12 : 0,
       floating: floatAmt,
       groundHeight: 0,
@@ -1815,6 +1829,20 @@ window.pet?.onToggleRain?.((on) => { petalRain = !!on; });
 let peekEdge = null;
 let peekAmt = 0;
 window.pet?.onPeek?.((edge) => { peekEdge = edge || null; });
+
+// 你离开电脑她就睡，你回来她就醒
+window.pet?.onUserIdle?.((idle) => {
+  if (idle) {
+    if (act === 'chase') return;         // 正在扑小蛋就别打断
+    enterAct('sleep', 900);
+    showBubble('你去忙，我趴会儿', 3000);
+  } else {
+    enterAct('idle', 12);
+    showBubble('回来了', 2200);
+    eggBounce = 1;
+    fairySpin = 1;
+  }
+});
 
 window.pet?.onTyping?.((d) => {
   typingAt = performance.now();
