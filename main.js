@@ -1043,9 +1043,127 @@ function getEdgeTTS() {
   return edgeTTS;
 }
 
+/* ---------------- 本地离线朗读（可选） ----------------
+   和 ASR 一样用 sherpa-onnx，模型放 models/tts 就跑，没放就自动退回 Edge。
+   好处是完全不联网；代价是模型约 120MB、声音不如 Edge 自然。
+   用「wav」返回：这里是 WAV 字节直接转 base64，前端一个 Audio 就能播。 */
+// 模型不进安装包（116MB，便携版自解压会更慢），两个位置任选其一：
+//   程序目录/models/tts  或  %APPDATA%/EggIslandPet/models/tts
+const TTS_DIRS = [
+  path.join(__dirname, 'models', 'tts'),
+  path.join(app.getPath('appData'), 'EggIslandPet', 'models', 'tts')
+];
+const TTS_DIR = TTS_DIRS.find((d) => fs.existsSync(path.join(d, 'model.onnx'))) || TTS_DIRS[0];
+let ttsEngine = null;
+let ttsBroken = false;
+
+function localTtsReady() {
+  try {
+    return fs.existsSync(path.join(TTS_DIR, 'model.onnx'))
+      && fs.existsSync(path.join(TTS_DIR, 'tokens.txt'))
+      && fs.existsSync(path.join(TTS_DIR, 'lexicon.txt'));
+  } catch { return false; }
+}
+
+function getLocalTts() {
+  if (ttsEngine) return ttsEngine;
+  if (ttsBroken) return null;
+  if (!localTtsReady()) return null;
+  try {
+    const { OfflineTts } = require('sherpa-onnx-node');
+    const f = (n) => path.join(TTS_DIR, n);
+    ttsEngine = new OfflineTts({
+      model: {
+        vits: {
+          model: f('model.onnx'),
+          lexicon: f('lexicon.txt'),
+          tokens: f('tokens.txt'),
+          dictDir: f('dict')
+        },
+        numThreads: 2,
+        debug: false,
+        provider: 'cpu'
+      },
+      ruleFsts: [f('date.fst'), f('number.fst'), f('phone.fst')].join(','),
+      maxNumSentences: 1
+    });
+    return ttsEngine;
+  } catch (e) {
+    console.log('[tts-local] init failed:', e.message);
+    ttsBroken = true;
+    return null;
+  }
+}
+
+// Float32 单声道 → WAV 字节（16bit），浏览器直接能播
+function floatToWav(samples, sampleRate) {
+  const n = samples.length;
+  const buf = Buffer.alloc(44 + n * 2);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + n * 2, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i]));
+    buf.writeInt16LE((v * 32767) | 0, 44 + i * 2);
+  }
+  return buf;
+}
+
 ipcMain.handle('tts', async (_e, text) => {
-  const { MsEdgeTTS, OUTPUT_FORMAT } = getEdgeTTS();
   const s = readSettings();
+  // 设置里可以强制走 Edge；默认本地优先
+  if (s.ttsLocal !== false) {
+    const engine = getLocalTts();
+    if (engine) {
+      try {
+        /* Electron 的 Node 不允许 addon 返回「外部 ArrayBuffer」，
+           generate() 会直接抛 External buffers are not allowed。
+           但 generateAsync 的 onProgress 是分块回调，每块可以正常拷出来，
+           所以这里用回调攒样本，最后那句 settlement failed 无视即可。 */
+        const chunks = [];
+        let rate = 16000;
+        try {
+          await engine.generateAsync({
+            text: String(text).slice(0, 200),
+            sid: 0,
+            speed: 1.0,
+            onProgress: (info) => {
+              try {
+                if (info && info.samples && info.samples.length) {
+                  chunks.push(new Float32Array(info.samples));
+                }
+              } catch {}
+              return 1;
+            }
+          });
+        } catch { /* settlement failed：音频已经拿到了，忽略 */ }
+
+        let total = 0;
+        for (const c of chunks) total += c.length;
+        if (total > 0) {
+          const all = new Float32Array(total);
+          let off = 0;
+          for (const c of chunks) { all.set(c, off); off += c.length; }
+          const wav = floatToWav(all, rate);
+          return 'data:audio/wav;base64,' + wav.toString('base64');
+        }
+      } catch (e) {
+        console.log('[tts-local] synth failed:', e.message);
+      }
+    }
+  }
+
+  const { MsEdgeTTS, OUTPUT_FORMAT } = getEdgeTTS();
   const voiceName = s.ttsVoice || 'zh-CN-XiaoxiaoNeural';
   const rate = Number.isFinite(s.ttsRate) ? s.ttsRate : 8;
 
@@ -1700,6 +1818,19 @@ ipcMain.on('context-menu', () => {
       click: (item) => typingSet(item.checked)
     },
     { label: '今天陪你多久', click: () => petSay(companionLine()) },
+    {
+      label: '本地离线朗读（不吃网络）',
+      type: 'checkbox',
+      checked: readSettings().ttsLocal !== false,
+      click: (item) => {
+        writeSettings({ ttsLocal: item.checked });
+        if (item.checked && !localTtsReady()) {
+          petSay('没找到语音模型，先用联网的声音');
+        } else {
+          petSay(item.checked ? '好，用本地的声音' : '换回联网的声音');
+        }
+      }
+    },
     {
       label: '花瓣雨',
       type: 'checkbox',

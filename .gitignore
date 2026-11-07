@@ -7,6 +7,7 @@ _asr_test.*
 # 离线 ASR 模型（190MB 流式 / 79MB paraformer），不进仓库 / 安装包另配
 models/asr/
 models/asr-para/
+models/tts/
 _asr_verify/
 _verify_asr.js
 _tune_asr.js

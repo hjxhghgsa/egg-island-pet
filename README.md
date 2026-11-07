@@ -244,6 +244,38 @@ curl -L -o tokens.txt      https://hf-mirror.com/csukuangfj/sherpa-onnx-paraform
 
 ### 语音朗读
 
+**现在可以完全离线**：本地 VITS 模型（`models/tts`，约 130MB）在就优先用本地，
+不在就自动退回微软 Edge 神经语音，你什么都不用配。
+
+- 本地引擎和语音输入是同一套 `sherpa-onnx`，合成一句话约 0.7~1.4 秒（CPU）。
+- 右键菜单可开关「本地离线朗读」；关掉就走联网的 Edge，声音更自然。
+- **模型不进安装包**（便携版自解压已经够慢了），两个位置放哪都行：
+  `程序目录/models/tts/` 或 `%APPDATA%\EggIslandPet\models\tts/`。
+
+装模型（在 `models/` 下执行）：
+
+```bash
+mkdir -p tts/dict/pos_dict && cd tts
+B=https://hf-mirror.com/csukuangfj/vits-zh-hf-fanchen-C/resolve/main
+curl -L -o model.onnx   $B/vits-zh-hf-fanchen-C.onnx
+curl -L -o lexicon.txt  $B/lexicon.txt
+curl -L -o tokens.txt   $B/tokens.txt
+curl -L -o date.fst     $B/date.fst
+curl -L -o number.fst   $B/number.fst
+curl -L -o phone.fst    $B/phone.fst
+for f in hmm_model.utf8 idf.utf8 jieba.dict.utf8 stop_words.utf8 user.dict.utf8 \
+         pos_dict/char_state_tab.utf8 pos_dict/prob_emit.utf8 \
+         pos_dict/prob_start.utf8 pos_dict/prob_trans.utf8; do
+  curl -L -o dict/$f $B/dict/$f
+done
+```
+
+> 坑：Electron 的 Node **不允许 addon 返回外部 ArrayBuffer**，`tts.generate()` 会直接抛
+> `External buffers are not allowed`。但 `generateAsync` 的 `onProgress` 是分块回调，
+> 每块都能正常拷出来，所以代码里用回调攒样本，最后那个 `settlement failed` 无视即可。
+
+### 联网朗读（Edge）
+
 右上 🔊 开关。用**微软 Edge 神经语音**（`msedge-tts`），比 Windows 自带的 SAPI 自然得多。
 默认晓晓，设置里可以换成晓伊 / 晓辰 / 晓涵 / 云希（男）/ 小北（东北话）。
 
