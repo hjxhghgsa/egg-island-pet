@@ -240,10 +240,10 @@ function createWindow() {
 }
 
 const GREETS = {
-  morning: ['早上好呀～', '早，今天也一起加油', '醒了？先喝口水'],
-  noon: ['中午了，吃点什么吧', '午后容易困，别硬撑', '歇十分钟再继续'],
-  evening: ['晚上好～', '今天辛苦啦', '收个尾就休息吧'],
-  night: ['这么晚还没睡？', '夜深了，早点睡', '我陪你一会儿就去睡吧']
+  morning: ['早', '早上好，先喝口水吧', '醒了？今天也慢慢来'],
+  noon: ['中午了，去吃点东西', '这个点容易困，歇十分钟', '别硬撑，先吃饭'],
+  evening: ['晚上好', '今天辛苦了', '收个尾就休息吧'],
+  night: ['还没睡？', '夜深了', '我陪你一会儿，然后去睡吧']
 };
 
 function greetSlot() {
@@ -736,6 +736,7 @@ let flingTimer = null;
 
 ipcMain.on('drag-start', () => {
   if (!win) return;
+  sendWin('peek', null);
   stopFling();
   stopGlide();
   const cursor = screen.getCursorScreenPoint();
@@ -806,9 +807,13 @@ function snapToEdge() {
     else if (min === dt2) ty = area.y;
     else ty = area.y + area.height - b.height;
   }
-  if (process.env.PET_DEBUG) console.log('[snap]', JSON.stringify({ from: [b.x, b.y], to: [tx, ty], min: Math.round(min) }));
+  let edge = null;
+  if (tx !== b.x) edge = tx === area.x ? 'left' : 'right';
+  if (process.env.PET_DEBUG) console.log('[snap]', JSON.stringify({ edge, from: [b.x, b.y], to: [tx, ty] }));
   if (tx === b.x && ty === b.y) { writeSettings({ x: b.x, y: b.y }); return; }
   glideTo(tx, ty);
+  // 贴到左右边就探出头看她，贴上下边就正常站着
+  setTimeout(() => sendWin('peek', edge), 220);
 }
 
 function stopFling() {
@@ -1346,13 +1351,14 @@ ipcMain.on('voice-command', (_e, action, raw) => {
 /* ---------------- 小蛋助手：陪伴 / 健康提醒 / 番茄钟 ----------------
    能力参考 GitHub 上的 DeskPet Live2D、Toty、SUDARI：都是把提醒做成
    角色的一句话，而不是冷冰冰的系统弹窗；再加番茄钟和屏幕/剪贴板感知。 */
+// 她安静、话少，句子短，不用感叹号堆情绪
 const CARE = {
-  eye:   ['看看远处 20 秒～', '眨眨眼，歇一下', '抬眼看看窗外吧'],
-  water: ['喝口水吧～', '杯子空了，添点水', '补点水再继续'],
-  move:  ['起来伸个懒腰吧', '肩膀紧了吧，动一动', '走两步，别久坐'],
-  late:  ['这么晚啦，早点收工', '今天够了，休息吧', '我陪你，但别熬太狠'],
-  mood:  ['我在呢，慢慢来', '歇会儿也没关系', '今天也辛苦啦',
-          '刚才那下挺利索', '深呼吸一下，不急', '有我陪着你呢']
+  eye:   ['看看远处吧，二十秒就够', '眼睛该歇一下了', '抬头，看看窗外'],
+  water: ['喝点水吧', '杯子该添了', '先喝一口再继续'],
+  move:  ['起来走两步吧', '肩膀有点紧了', '坐太久了，动一动'],
+  late:  ['不早了，收个尾吧', '今天到这儿吧', '别熬太狠，我等你明天来'],
+  mood:  ['我在', '慢慢来，不急', '歇会儿也没关系',
+          '你今天挺认真的', '深呼吸一下', '陪着你呢']
 };
 const pickLine = (arr) => arr[Math.floor(Math.random() * arr.length)];
 

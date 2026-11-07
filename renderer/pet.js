@@ -75,6 +75,78 @@ holder.add(spinner);
    所有星尘、连击、走路、秋千的环境光都用这一套。 */
 const sparks = createParticles(THREE, scene, 720);
 
+/* ---------------- 打字键盘 ----------------
+   键帽用 InstancedMesh 试过：小方块在这个尺寸下根本看不清，还容易被底板挡住。
+   改成一张 Canvas 画的键盘贴图 —— 一次 draw call、键位清晰、亮键直接重绘。
+   只有打字时才升起来，停手就落下去。 */
+const KB_W = 256, KB_H = 96, KB_COLS = 14, KB_ROWS = 4;
+const kbCanvas = document.createElement('canvas');
+kbCanvas.width = KB_W;
+kbCanvas.height = KB_H;
+const kbCtx = kbCanvas.getContext('2d');
+const kbTex = new THREE.CanvasTexture(kbCanvas);
+kbTex.colorSpace = THREE.SRGBColorSpace;
+const kbLit = new Float32Array(KB_COLS * KB_ROWS);   // 每个键的亮起强度 0~1
+let kbLastDraw = 0;
+
+// 键帽在贴图里的位置，draw 和点亮共用
+function kbKeyRect(i) {
+  const r = (i / KB_COLS) | 0;
+  const c = i % KB_COLS;
+  const padX = 6, padY = 8, gap = 2;
+  const kw = (KB_W - padX * 2 - gap * (KB_COLS - 1)) / KB_COLS;
+  const kh = (KB_H - padY * 2 - gap * (KB_ROWS - 1)) / KB_ROWS;
+  return [padX + c * (kw + gap), padY + r * (kh + gap), kw, kh];
+}
+
+function kbDraw() {
+  const g = kbCtx;
+  g.clearRect(0, 0, KB_W, KB_H);
+  // 底板
+  g.fillStyle = '#3b3346';
+  g.beginPath();
+  const rad = 6;
+  g.moveTo(rad, 0);
+  g.arcTo(KB_W, 0, KB_W, KB_H, rad);
+  g.arcTo(KB_W, KB_H, 0, KB_H, rad);
+  g.arcTo(0, KB_H, 0, 0, rad);
+  g.arcTo(0, 0, KB_W, 0, rad);
+  g.closePath();
+  g.fill();
+  // 键帽
+  for (let i = 0; i < KB_COLS * KB_ROWS; i++) {
+    const [x, y, w, h] = kbKeyRect(i);
+    const lit = kbLit[i];
+    if (lit > 0.01) {
+      const c = 220 + 35 * lit;
+      g.fillStyle = `rgb(${Math.round(c)},${Math.round(110 + 60 * (1 - lit))},${Math.round(150 + 40 * (1 - lit))})`;
+    } else {
+      g.fillStyle = '#cfc8dc';
+    }
+    g.beginPath();
+    g.roundRect(x, y, w, h, 2);
+    g.fill();
+  }
+  kbTex.needsUpdate = true;
+}
+
+const kbGroup = new THREE.Group();
+kbGroup.visible = false;
+spinner.add(kbGroup);
+const kbMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.52, 0.195),
+  new THREE.MeshBasicMaterial({ map: kbTex, transparent: true, toneMapped: false })
+);
+kbGroup.add(kbMesh);
+kbGroup.position.set(0, 0.26, 0.46);
+kbGroup.rotation.x = -0.55;
+kbDraw();
+
+function kbPoke() {
+  for (let n = 0; n < 3; n++) kbLit[(Math.random() * kbLit.length) | 0] = 1;
+  kbDraw();
+}
+
 /* ---------------- 秋千道具 ---------------- */
 const swingGroup = new THREE.Group();
 swingGroup.visible = false;
@@ -975,28 +1047,29 @@ let lastActSent = null;
 const CLICK_GAP = 430;        // 两次点击间隔小于它算「连续」
 const COMBO_IDLE = 1200;       // 多久没点就退出连击
 
-const TAP_LINES = ['嘿嘿~', '别戳啦', '有点痒!', '再来一下?', '呀!', '陪我玩嘛', '今天也辛苦啦', '被你发现啦'];
+// 她是个安静的女孩子：少用感叹号，句子短一点、轻一点
+const TAP_LINES = ['嗯？', '在呢', '轻一点…', '我听着', '怎么啦', '嗯。', '想说什么就说吧', '我在的'];
 
 // 整十连击各给一套不同的庆祝，不再每档都只是「花开啦」
 const COMBO_TIERS = {
-  10: () => { popBits('star', 30); petalFall(6); showBubble('×10 满天星!', 2400); },
+  10: () => { popBits('star', 30); petalFall(6); showBubble('×10', 2200); },
   20: () => {
     for (let i = 0; i < 10; i++) {
       setTimeout(() => bloomFlower(10 + i * 8, 0, { flower: true, scale: 1.15 }), i * 70);
     }
     petalFall(10);
-    showBubble('×20 花海!', 2600);
+    showBubble('×20', 2200);
   },
   30: () => {
     petalFall(20);
     popBits('petal', 44);
-    showBubble('×30 落樱!', 2800);
+    showBubble('×30', 2400);
   },
   40: () => {
     for (let r = 0; r < 3; r++) {
       setTimeout(() => { popBits('star', 36); petalFall(12); }, r * 260);
     }
-    showBubble('×40 手不累吗!', 3200);
+    showBubble('×40，歇会儿吧', 3000);
   }
 };
 
@@ -1296,7 +1369,11 @@ function tick() {
     walkX += (0 - walkX) * Math.min(1, dt * 4);
     walkStep = 0;
   }
-  holder.position.x = walkX;
+  // 探头：贴着屏幕左边就往左探出，右边同理；鼠标移到她身上会缩回去
+  const peekWant = (peekEdge === 'left' || peekEdge === 'right') && !hovering ? 1 : 0;
+  peekAmt += (peekWant - peekAmt) * Math.min(1, dt * 5);
+  const peekOff = (peekEdge === 'left' ? -1 : 1) * 0.34 * peekAmt;
+  holder.position.x = walkX + peekOff;
 
   // 撒花：四周依次绽开，偶尔飘落花瓣
   if (act === 'bloom') {
@@ -1444,11 +1521,13 @@ function tick() {
 
     // 打字反应：这个模型手藏在蓬蓬裙后面，抬手只会看着像「指人」，
     // 所以改成跟着敲字节奏轻轻点头 + 身体微颤 —— 反而更像「她在跟着你打字」。
-    if (typingHeat > 0.02) {
-      // 基础节奏 + 每次敲击的额外低头，两段叠加才有「一下一下」的实感
-      const ph = t * 11;
-      pitchBone(rig, rig.head, (Math.sin(ph) * 0.06 + typeHit * 0.10) * typingHeat, 'x');
-      pitchBone(rig, rig.chest, (Math.sin(ph + 0.6) * 0.03 + typeHit * 0.045) * typingHeat, 'x');
+    if (typingHeat > 0.02 && !dragging) {
+      // 以前是「每按一个键抖一下头」，8 次/秒看着像抽搐。
+      // 现在改成 4.5Hz 的极轻起伏 + 一点点低头，像安静地在看屏幕。
+      const ph = t * 4.5;
+      const lean = Math.min(1, typingHeat);
+      pitchBone(rig, rig.head, (0.045 + Math.sin(ph) * 0.012) * lean, 'x');
+      pitchBone(rig, rig.chest, (0.02 + Math.sin(ph + 0.8) * 0.008) * lean, 'x');
     }
 
     // 扑击：两条胳膊一起往前伸，抓空了再收回来
@@ -1478,6 +1557,31 @@ function tick() {
     lastActSent = act;
   }
 
+  // 偶尔轻轻哼一句歌 —— 她喜欢唱歌，但不吵你
+  humTimer -= dt;
+  if (humTimer <= 0) {
+    humTimer = 240 + Math.random() * 360;          // 4~10 分钟一次
+    if (!typingHeat && (act === 'idle' || act === 'sit' || act === 'swing') && !bubbleEl?.classList.contains('show')) {
+      showBubble('♪', 1800);
+      sparks.burst({ x: 0, y: 0.9, z: 0.2 }, {
+        n: 3, colors: ['#ffe9f4', '#ffd0e6'], speed: 0.3, up: 1,
+        sizeMin: 4, sizeMax: 7, lifeMin: 0.8, lifeMax: 1.6
+      });
+    }
+  }
+
+  // 键盘：打字时升起来，停手后落下去；亮键慢慢暗回去（重绘限到 ~20fps）
+  const kbWant = typingHeat > 0.05 ? 1 : 0;
+  kbGroup.visible = kbWant > 0 || kbGroup.position.y > 0.04;
+  kbGroup.position.y += ((kbWant ? 0.26 : 0.02) - kbGroup.position.y) * Math.min(1, dt * 8);
+  let kbDirty = false;
+  for (let i = 0; i < kbLit.length; i++) {
+    if (kbLit[i] <= 0) continue;
+    kbLit[i] = Math.max(0, kbLit[i] - dt * 3);
+    kbDirty = true;
+  }
+  if (kbDirty && t - kbLastDraw > 0.05) { kbLastDraw = t; kbDraw(); }
+
   // 打字时每 0.7 秒在身前飘一颗小星
   if (typingHeat > 0.3) {
     typeFxTimer -= dt;
@@ -1490,11 +1594,12 @@ function tick() {
     }
   }
 
-  // 每次敲击的冲量：身体轻轻一压一弹
-  typeHit *= Math.exp(-dt * 12);
-  if (typeHit > 0.01) {
-    squash *= 1 - typeHit * 0.035;
-    spinner.position.y += typeHit * 0.012;
+  // 敲击只留极轻的呼吸起伏，不做「一下一下」的弹跳（那是抽搐感的来源）
+  typeHit *= Math.exp(-dt * 6);
+  if (typingHeat > 0.02) {
+    const breathe = Math.sin(t * 2.1) * 0.004 * Math.min(1, typingHeat);
+    squash *= 1 - breathe;
+    spinner.position.y += breathe * 0.6;
   }
 
   // 停止打字后 0.4 秒放开
@@ -1616,15 +1721,22 @@ let typingHeat = 0;
 let typeFxTimer = 0;
 let typingAt = 0;
 let typeHit = 0;                 // 每一次按键的冲击，衰减很快
+let humTimer = 90 + Math.random() * 120;   // 第一次哼歌别太早
 let petalRain = false;
 let rainTimer = 0;
 window.pet?.onToggleRain?.((on) => { petalRain = !!on; });
+
+// 贴到屏幕左右边时「探出头」：把身体往窗外推，被窗口裁掉一半
+let peekEdge = null;
+let peekAmt = 0;
+window.pet?.onPeek?.((edge) => { peekEdge = edge || null; });
 
 window.pet?.onTyping?.((d) => {
   typingAt = performance.now();
   if (d && d.stop) { typingHeat = 0; return; }
   typingHeat = 1;
   typeHit = 1;
+  kbPoke();
   // 每一下都冒两颗小星，才看得出「她在跟着你敲」
   sparks.burst({ x: rnd(-0.2, 0.2), y: 0.78, z: 0.24 }, {
     n: 2, colors: ['#fff2c4', '#ffd9ee', '#cfe4ff'], speed: 0.5, up: 0.7,
