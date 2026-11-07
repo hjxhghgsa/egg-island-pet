@@ -238,6 +238,19 @@ for (let i = 0; i < 3; i++) {
   holder.add(s);
   fairyTrail.push(s);
 }
+// 吉祥物的拖尾按历史位置跟随，才有"跟着飞"的延迟感
+const fairyHist = [
+  new THREE.Vector3(0.30, 0.64, 0.20),
+  new THREE.Vector3(0.30, 0.64, 0.20),
+  new THREE.Vector3(0.30, 0.64, 0.20)
+];
+let trailTimer = 0;
+let fairySpin = 0;
+let lastActForElf = '';
+let orbitWait = 20 + Math.random() * 20;   // 多久绕她飞一圈
+let orbitT = 0;
+let orbitSpin = 0;
+
 let fairyOn = true;
 window.__pet.fairy = (on) => {
   fairyOn = on === undefined ? !fairyOn : !!on;
@@ -475,9 +488,14 @@ const EGG_LINES = [
 
 function eggTap() {
   showBubble(EGG_LINES[Math.floor(Math.random() * EGG_LINES.length)], 3200);
-  popBits('love', 6);
+  popBits('love', 8);
   bloomFlower(62, 70);
   eggBounce = 1;
+  fairySpin = 1;                 // 被点会翻个身，才算有反应
+  sparks.burst({ x: fairy.position.x, y: fairy.position.y, z: fairy.position.z }, {
+    n: 6, colors: ['#ffd9ee', '#fff2c4'], speed: 0.6, up: 0.8,
+    sizeMin: 4, sizeMax: 9, lifeMin: 0.4, lifeMax: 0.9
+  });
 }
 
 window.pet?.onPetSay?.((d) => {
@@ -1142,6 +1160,10 @@ window.addEventListener('dblclick', (ev) => {
 });
 
 window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
+window.__pet.fairyPos = () => [
+  +fairy.position.x.toFixed(3), +fairy.position.y.toFixed(3), +fairy.position.z.toFixed(3)
+];
+
 window.__pet.modelInfo = () => {
   if (!modelRoot) return 'no model';
   const b = new THREE.Box3().setFromObject(modelRoot);
@@ -1260,52 +1282,81 @@ function tick() {
     });
   }
 
-  /* 小精灵：绕着角色飞，扇翅膀 + 拖尾光点 */
+  /* 小精灵（吉祥物）：一直围着她飘 —— 慢慢绕圈 + 快速轻微上下浮，
+     她有动作（跳/转/招手）时它会翻一下，像是跟着起哄。 */
   fairy.visible = fairyOn;
   for (const s of fairyTrail) s.visible = fairyOn;
   if (fairyOn) {
-    const spd = act === 'chase' ? 2.1 : 0.85;
-    const fz = 0.44 + Math.cos(t * spd) * 0.06;
+    let fx, fy, fz2;
     if (act === 'chase') {
-      // 小蛋要有「参与感」：先主动凑近逗她，她蹲下时后退半步，
-      // 一扑过来就往上窜开，落定后再慢慢飘回去 —— 两个角色才有来回。
       const u2 = (t % POUNCE_CYCLE) / POUNCE_CYCLE;
       const approach = u2 < 0.30
-        ? 0.46 - (u2 / 0.30) * 0.14                    // 一点点靠近
-        : (u2 < 0.42 ? 0.32 + pounceCrouch * 0.06       // 她蹲下，它退半步
-          : 0.38 + pounceLeap * 0.22);                  // 扑过来 → 窜开
-      const back = u2 > 0.56 ? (u2 - 0.56) / 0.44 * 0.1 : 0;   // 之后慢慢飘回来
-      const dodge = pounceLeap * 0.3;
-      fairy.position.set(
-        approach - back,
-        0.52 + dodge + Math.sin(t * 2.4) * 0.03,
-        0.26 + Math.sin(t * 1.7) * 0.02
-      );
-      // 被扑的时候原地转一圈，像在得意
+        ? 0.46 - (u2 / 0.30) * 0.14
+        : (u2 < 0.42 ? 0.32 + pounceCrouch * 0.06 : 0.38 + pounceLeap * 0.22);
+      const back = u2 > 0.56 ? (u2 - 0.56) / 0.44 * 0.1 : 0;
+      fx = approach - back;
+      fy = 0.52 + pounceLeap * 0.3 + Math.sin(t * 2.4) * 0.03;
+      fz2 = 0.26 + Math.sin(t * 1.7) * 0.02;
       fairy.rotation.y = pounceLeap * 1.6 + Math.sin(t * 1.3) * 0.1;
     } else {
-      // 平时飘在身侧，别趴在头顶挡脸
-      fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
-      fairy.rotation.y += (0 - fairy.rotation.y) * Math.min(1, dt * 4);
+      // 慢速绕圈（约 11 秒一圈）+ 每秒 2 次的上下浮 + 一点点快速抖动
+      fx = 0.30 + Math.sin(t * 0.57) * 0.17 + Math.sin(t * 3.7) * 0.010;
+      fy = 0.64 + Math.sin(t * 2.05) * 0.055 + Math.sin(t * 4.3) * 0.008;
+      fz2 = 0.20 + Math.cos(t * 0.57) * 0.09;
+
+      // 每 30~60 秒，绕她飞一整圈 —— 这就是「在旁边转来转去」
+      orbitWait -= dt;
+      if (orbitWait <= 0 && orbitT <= 0) {
+        orbitT = 0.0001;
+        orbitSpin = Math.random() * Math.PI * 2;
+      }
+      if (orbitT > 0) {
+        orbitT += dt / 3.4;
+        if (orbitT >= 1) { orbitT = 0; orbitWait = 30 + Math.random() * 30; }
+        const ang = orbitSpin + orbitT * Math.PI * 2;
+        fx = Math.cos(ang) * 0.30;
+        fz2 = 0.18 + Math.sin(ang) * 0.10;
+        fy = 0.60 + Math.sin(orbitT * Math.PI) * 0.10;   // 绕的时候抬高一点，别穿裙子
+      }
+      fairy.rotation.y += (Math.sin(t * 0.9) * 0.3 - fairy.rotation.y) * Math.min(1, dt * 3);
     }
-    fairyGlow.visible = false;
+    fairy.position.set(fx, fy, fz2);
+
+    // 拖尾按「历史位置」跟，而不是自己另算一条轨迹
+    trailTimer -= dt;
+    if (trailTimer <= 0) {
+      trailTimer = 0.07;
+      fairyHist[2].copy(fairyHist[1]);
+      fairyHist[1].copy(fairyHist[0]);
+      fairyHist[0].copy(fairy.position);
+    }
+    fairyTrail.forEach((s, i) => {
+      s.position.copy(fairyHist[Math.min(i, 2)]);
+      s.material.opacity = 0.26 - i * 0.07;
+    });
+
     if (eggRoot) {
       eggBounce = Math.max(0, eggBounce - dt * 1.8);
       eggRoot.position.y = eggBounce * 0.09 + Math.sin(t * 2.3) * 0.012;
       eggRoot.rotation.z = Math.sin(t * 1.6) * 0.10 + eggBounce * Math.sin(t * 18) * 0.08;
-      eggRoot.rotation.y = Math.sin(t * 0.8) * 0.22;
+      eggRoot.rotation.y = Math.sin(t * 0.8) * 0.22 + fairySpin * 1.2;
       updateRig(eggRoot, { time: t, dt, floating: 1, speed: 0, groundHeight: 0 });
       softenHands(eggRoot.userData.islandRig, act === 'wave', t + 0.7);
     }
-    fairyTrail.forEach((s, i) => {
-      const tt = t * spd - (i + 1) * 0.16;
-      s.position.set(
-        Math.sin(tt) * 0.16 + 0.34,
-        0.66 + Math.sin(tt / spd * 1.9) * 0.09,
-        0.44 + Math.cos(tt) * 0.06
-      );
-      s.material.opacity = 0.30 - i * 0.07;
-    });
+    // 她一做动作（跳、转圈、招手、撒花），小蛋就翻个身跟着起哄
+    if (act !== lastActForElf) {
+      lastActForElf = act;
+      if (act === 'hop' || act === 'spin' || act === 'wave' || act === 'bloom') {
+        eggBounce = 1.2;
+        fairySpin = 1;
+        sparks.burst({ x: fairy.position.x, y: fairy.position.y, z: fairy.position.z }, {
+          n: 4, colors: ['#fff2c4', '#ffd9ee'], speed: 0.4, up: 0.8,
+          sizeMin: 4, sizeMax: 8, lifeMin: 0.4, lifeMax: 0.9
+        });
+      }
+    }
+    fairySpin = Math.max(0, fairySpin - dt * 1.2);
+    fairyGlow.visible = false;
   }
 
   /* 各节目独有动作 */
@@ -1751,7 +1802,6 @@ window.pet?.onSwitchModel((k) => {
 window.pet?.onToggleMusic(() => { toggleMusic(); });
 // 打字反应：主进程只告诉我们「还在打 / 停了」，不含任何键位内容
 let typingHeat = 0;
-let typeFxTimer = 0;
 let typingAt = 0;
 let typeHit = 0;                 // 每一次按键的冲击，衰减很快
 let humTimer = 90 + Math.random() * 120;   // 第一次哼歌别太早
