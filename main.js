@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer, shell, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -57,6 +57,9 @@ function writeSettings(patch) {
 let win = null;
 let tray = null;
 let dragOrigin = null;
+let autoHideTimer = null;
+let userTouched = false;
+const SUMMON_KEY = 'Control+Alt+E';
 
 function createWindow() {
   const s = readSettings();
@@ -104,6 +107,23 @@ function createWindow() {
     win.setAlwaysOnTop(true, 'screen-saver');
     const q = s.quality || 'balanced';
     win.webContents.send('apply-settings', { quality: q, scale: s.scale || 1 });
+
+    // 露个脸就藏起来，等召唤。碰过她就不藏了
+    if (!process.env.PET_KEEP && !process.env.PET_SHOT) {
+      try {
+        tray.displayBalloon({
+          title: '蛋岛宠物在后台',
+          content: '按 Ctrl+Alt+E 召唤她，或者点右下角托盘图标。'
+        });
+      } catch {}
+      autoHideTimer = setTimeout(() => {
+        if (!win || win.isDestroyed() || !win.isVisible()) return;
+        // 正在聊天就不收起来
+        if (chatWin && !chatWin.isDestroyed()) return;
+        win.hide();
+        console.log('[autohide] hidden');
+      }, 3000);
+    }
   });
 
   // 别的窗口抢焦点时会被压下去，这里一直抢回最上层
@@ -118,10 +138,28 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
+function summon() {
+  if (!win || win.isDestroyed()) return createWindow();
+  if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; }
+  userTouched = true;
+  if (!win.isVisible()) {
+    win.show();
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.webContents.send('summon');
+  } else {
+    win.focus();
+    win.webContents.send('summon');
+  }
+}
+
+function dismiss() {
+  if (win && !win.isDestroyed()) win.hide();
+}
+
 function toggleVisible() {
-  if (!win) return createWindow();
-  if (win.isVisible()) win.hide();
-  else win.show();
+  if (!win || win.isDestroyed()) return createWindow();
+  if (win.isVisible()) dismiss();
+  else summon();
 }
 
 function buildTray() {
@@ -129,7 +167,7 @@ function buildTray() {
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }));
   tray.setToolTip('蛋岛宠物');
   const menu = Menu.buildFromTemplate([
-    { label: '显示 / 隐藏', click: toggleVisible },
+    { label: '召唤 / 收起  (' + SUMMON_KEY.replace('Control', 'Ctrl') + ')', click: toggleVisible },
     { type: 'separator' },
     {
       label: '开机自启',
@@ -161,8 +199,16 @@ app.whenReady().then(async () => {
   createWindow();
   buildTray();
 
+  try {
+    const ok = globalShortcut.register(SUMMON_KEY, toggleVisible);
+    console.log('[hotkey]', SUMMON_KEY, ok ? 'registered' : 'FAILED');
+  } catch (e) {
+    console.error('[hotkey]', e.message);
+  }
+
   // 调试：PET_SHOT=<路径> 时抓一张桌面合成图后退出
   if (process.env.PET_CHAT) setTimeout(() => openChat(), 3500);
+  if (process.env.PET_SUMMON) setTimeout(() => { summon(); console.log('[summon] called'); }, 6000);
   if (process.env.PET_MUSIC) {
     setTimeout(async () => {
       try {
@@ -236,6 +282,10 @@ app.on('window-all-closed', () => {
   // 托盘常驻，不随窗口关闭退出
 });
 
+app.on('will-quit', () => {
+  try { globalShortcut.unregisterAll(); } catch {}
+});
+
 // ---- IPC ----
 
 // 悬停命中判定：切换鼠标穿透
@@ -307,6 +357,13 @@ function openChat() {
 
 ipcMain.on('open-chat', openChat);
 ipcMain.on('close-chat', () => { if (chatWin) chatWin.close(); });
+
+// 用户碰过她，就不再自动隐身
+ipcMain.on('user-touch', () => {
+  userTouched = true;
+  if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; }
+});
+ipcMain.on('dismiss', dismiss);
 
 // 歌单为空时用托盘气泡提醒一次
 let musicHinted = false;

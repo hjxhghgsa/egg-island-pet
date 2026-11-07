@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('pet', {
   noMusic: () => ipcRenderer.send('no-music'),
   onToggleMusic: (cb) => ipcRenderer.on('toggle-music', () => cb()),
   onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),
+  onSummon: (cb) => ipcRenderer.on('summon', () => cb()),
+  touch: () => ipcRenderer.send('user-touch'),
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
   onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k))
 });

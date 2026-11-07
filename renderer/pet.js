@@ -221,6 +221,7 @@ window.addEventListener('pointermove', (ev) => {
 });
 
 window.addEventListener('pointerdown', (ev) => {
+  window.pet?.touch();
   if (ev.button === 2) {
     ev.preventDefault();
     movingWin = true;
@@ -450,3 +451,9 @@ window.pet?.onSwitchModel((k) => {
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });
 window.pet?.onNextTrack(() => { nextTrack(); });
+
+// 被召唤出来时：蹦一下 + 转半圈
+window.pet?.onSummon(() => {
+  jumpVel = 2.6;
+  yawVel = 1.9;
+});
