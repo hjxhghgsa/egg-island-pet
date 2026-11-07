@@ -3,7 +3,8 @@ import { GLTFLoader } from '../vendor/addons/loaders/GLTFLoader.js';
 import { setupCharacterRig, setupPetRig, updateRig } from './animation.js';
 import { createParticles } from './fx3d.js';
 import { easePeek, easeBloom, noise2D, playSfx, setSfxOn, ossState } from './oss.js';
-import { setupCinema, enhanceMaterial, updateCinema, setCinema, cinemaState } from './cinema.js';
+import { setupCinema, enhanceMaterial, updateCinema, setCinema, cinemaState,
+         makeDetailMaps, smoothNormals } from './cinema.js';
 
 // 调试出口：主进程可随时读取
 window.__pet = { stage: 'boot', error: null, rev: THREE.REVISION };
@@ -16,6 +17,21 @@ window.__pet.ossState = ossState;
 window.__pet.playSfx = playSfx;
 window.__pet.cinemaState = cinemaState;
 window.__pet.setCinema = setCinema;
+window.__pet.switchTo = switchTo;
+window.__pet.detailInfo = () => {
+  let out = null;
+  modelRoot?.traverse((o) => {
+    if (o.isMesh && o.material?.userData?.petBase) {
+      out = {
+        normal: !!o.material.normalMap,
+        rough: !!o.material.roughnessMap,
+        roughness: +o.material.roughness.toFixed(2),
+        baseRoughness: +o.material.userData.petBase.roughness.toFixed(2)
+      };
+    }
+  });
+  return out;
+};
 // 热导入链路自检：验证 file:// 绝对路径的 GLB 能被 GLTFLoader 读到（不弹对话框）
 window.__pet.testFileUrl = async (url) => {
   try {
@@ -868,6 +884,8 @@ const loader = new GLTFLoader();
 function convertMaterial(mesh, opts) {
   const m = mesh.material;
   if (!m) return;
+  // 人物模型才做细节增强；小蛋和道具保持原样
+  if (opts.detail) smoothNormals(THREE, mesh.geometry);
   const convert = (src) => {
     const mat = new THREE.MeshPhysicalMaterial({
       color: src.color ? src.color.clone() : new THREE.Color('white'),
@@ -897,8 +915,8 @@ function convertMaterial(mesh, opts) {
       mat.map.anisotropy = 8;
       mat.map.colorSpace = THREE.SRGBColorSpace;
     }
-    // 视角边缘光 + 环境反射：只在材质 shader 尾部注入一行，不改几何、不破坏透明窗
-    enhanceMaterial(mat);
+    // 视角边缘光 + 环境反射 + 程序化法线/粗糙度贴图：不改几何、不破坏透明窗
+    enhanceMaterial(mat, opts.detail ? makeDetailMaps(THREE, mat.map) : null);
     return mat;
   };
   mesh.material = Array.isArray(m) ? m.map(convert) : convert(m);
@@ -940,7 +958,7 @@ async function loadModel(modelKey, { announce = true } = {}) {
       o.castShadow = false;
       o.receiveShadow = false;
       o.frustumCulled = false;
-      convertMaterial(o, { roughness: 0.52, clearcoat: 0.24 });
+      convertMaterial(o, { roughness: 0.52, clearcoat: 0.24, detail: true });
     }
   });
 
