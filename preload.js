@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('pet', {
   closeChat: () => ipcRenderer.send('close-chat'),
   chat: (messages) => ipcRenderer.invoke('chat', messages),
   captureScreen: () => ipcRenderer.invoke('capture-screen'),
+  snipScreen: () => ipcRenderer.invoke('snip-screen'),
+  snipDone: (rect) => ipcRenderer.send('snip-done', rect),
   listMusic: () => ipcRenderer.invoke('list-music'),
   noMusic: () => ipcRenderer.send('no-music'),
   onToggleMusic: (cb) => ipcRenderer.on('toggle-music', () => cb()),

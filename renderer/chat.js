@@ -6,7 +6,8 @@ const SYSTEM = '你是蛋岛上的女孩「蛋糕纯」，一个住在用户电�
 let history = [];
 let busy = false;
 let voiceOn = localStorage.getItem('eggpet_voice') !== '0';
-let lastShot = null;   // 只给当前这一轮用的截图
+let lastShot = null;
+let pendingAsk = '';
 
 /* ---------------- 显示 ---------------- */
 function bubble(text, who) {
@@ -23,9 +24,10 @@ function tip(text) {
   d.textContent = text;
   logEl.appendChild(d);
   logEl.scrollTop = logEl.scrollHeight;
+  return d;
 }
 
-/* ---------------- 语音朗读 ---------------- */
+/* ---------------- 朗读 ---------------- */
 function speak(text) {
   if (!voiceOn || !window.speechSynthesis) return;
   const u = new SpeechSynthesisUtterance(text);
@@ -37,8 +39,6 @@ function speak(text) {
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
 }
-if (window.speechSynthesis) speechSynthesis.onvoiceschanged = () => {};
-
 $('voice').classList.toggle('on', voiceOn);
 $('voice').onclick = () => {
   voiceOn = !voiceOn;
@@ -47,13 +47,14 @@ $('voice').onclick = () => {
   if (!voiceOn) speechSynthesis.cancel();
 };
 
-/* ---------------- 发消息 ---------------- */
+/* ---------------- 发送 ---------------- */
 async function ask(text) {
   if (busy) return;
   busy = true;
   $('send').disabled = true;
   $('mic').disabled = true;
   $('eye').disabled = true;
+  $('snipBtn').disabled = true;
   const pending = bubble('…', 'her');
 
   try {
@@ -68,7 +69,7 @@ async function ask(text) {
     if (history.length > 14) history = history.slice(-14);
     speak(reply);
   } catch (err) {
-    pending.textContent = '（连不上）' + (err.message || err);
+    pending.textContent = '（出错了）' + (err.message || err);
     pending.classList.add('tip');
   } finally {
     lastShot = null;
@@ -76,6 +77,7 @@ async function ask(text) {
     $('send').disabled = false;
     $('mic').disabled = false;
     $('eye').disabled = false;
+    $('snipBtn').disabled = false;
     logEl.scrollTop = logEl.scrollHeight;
     $('inp').focus();
   }
@@ -98,17 +100,30 @@ $('inp').addEventListener('keydown', (e) => {
 });
 $('close').onclick = () => window.pet.closeChat();
 
-/* ---------------- 看屏幕 ---------------- */
+/* ---------------- 看整块屏幕 ---------------- */
 $('eye').onclick = async () => {
   if (busy) return;
-  const q = '看看我现在屏幕上是什么，用一两句话说说。';
   bubble('看一眼我的屏幕 👁', 'me');
   try {
     lastShot = await window.pet.captureScreen();
-    await ask(q);
+    await ask('看看我现在屏幕上是什么，用一两句话说说。');
   } catch (err) {
     tip('截屏失败：' + (err.message || err));
     lastShot = null;
+  }
+};
+
+/* ---------------- 圈一块问她 ---------------- */
+$('snipBtn').onclick = async () => {
+  if (busy) return;
+  try {
+    const data = await window.pet.snipScreen();
+    if (!data) return;
+    lastShot = data;
+    bubble('圈了一块地方 ⬚', 'me');
+    await ask('我圈出来的这块是什么？简单说说。');
+  } catch (err) {
+    tip('圈选失败：' + (err.message || err));
   }
 };
 
@@ -122,17 +137,31 @@ if (SR) {
   recog.lang = 'zh-CN';
   recog.interimResults = false;
   recog.continuous = false;
+  recog.maxAlternatives = 1;
+
+  recog.onstart = () => {
+    recording = true;
+    $('mic').classList.add('rec');
+  };
   recog.onresult = (e) => {
-    const text = e.results[0][0].transcript.trim();
+    const text = (e.results[0][0].transcript || '').trim();
     if (text) {
       $('inp').value = text;
       sendTyped();
+    } else {
+      tip('没听清，再说一次');
     }
   };
   recog.onerror = (e) => {
     recording = false;
     $('mic').classList.remove('rec');
-    tip('语音识别不可用（' + e.error + '）。Electron 内置识别要联网到 Google，国内基本用不了，可以打字。');
+    const m = {
+      'no-speech': '没听到声音，靠近点麦克风再说',
+      'not-allowed': '麦克风权限被拒了',
+      'audio-capture': '找不到麦克风',
+      network: '语音服务连不上（可能要梯子）'
+    };
+    tip((m[e.error] || ('语音识别出错：' + e.error)));
   };
   recog.onend = () => {
     recording = false;
@@ -142,39 +171,34 @@ if (SR) {
   const startRec = (e) => {
     e.preventDefault();
     if (busy || recording) return;
-    recording = true;
-    $('mic').classList.add('rec');
     try { recog.start(); } catch { }
   };
-  const stopRec = (e) => {
-    e.preventDefault();
-    if (!recording) return;
-    try { recog.stop(); } catch { }
-  };
   $('mic').addEventListener('pointerdown', startRec);
-  $('mic').addEventListener('pointerup', stopRec);
-  $('mic').addEventListener('pointerleave', stopRec);
+  $('mic').addEventListener('pointerup', (e) => {
+    e.preventDefault();
+    if (recording) { try { recog.stop(); } catch { } }
+  });
 } else {
   $('mic').disabled = true;
-  $('mic').title = '这个环境不支持语音识别，只能打字';
+  $('mic').title = '这个环境不支持语音识别';
 }
 
 /* ---------------- 设置 ---------------- */
 async function loadCfg() {
   const c = (await window.pet.getSettings()) || {};
-  $('cfgUrl').value = c.apiUrl || 'http://localhost:11434/v1';
-  $('cfgModel').value = c.apiModel || 'qwen2.5:7b';
-  $('cfgKey').value = c.apiKey || 'ollama';
+  $('cfgUrl').value = c.apiUrl || 'https://api.deepseek.com/v1';
+  $('cfgModel').value = c.apiModel || 'deepseek-flash';
+  $('cfgKey').value = c.apiKey || '';
   $('cfgVision').value = c.apiVision || '';
 }
 $('gear').onclick = async () => { await loadCfg(); $('setup').classList.add('show'); };
 $('cfgCancel').onclick = () => $('setup').classList.remove('show');
 $('cfgSave').onclick = () => {
   window.pet.saveSettings({
-    apiUrl: $('cfgUrl').value.trim() || 'http://localhost:11434/v1',
-    apiModel: $('cfgModel').value.trim() || 'qwen2.5:7b',
-    apiKey: $('cfgKey').value.trim() || 'ollama',
-    apiVision: $('cfgVision').value.trim()
+    apiUrl: $('cfgUrl').value.trim() || 'https://api.deepseek.com/v1',
+    apiModel: $('cfgModel').value.trim() || 'deepseek-flash',
+    apiKey: $('cfgKey').value.trim(),
+    apiVision: $('cfgVision').value.trim() || $('cfgModel').value.trim()
   });
   $('setup').classList.remove('show');
   tip('接口已保存');
@@ -183,7 +207,7 @@ $('cfgSave').onclick = () => {
 /* ---------------- 启动 ---------------- */
 (async () => {
   const c = (await window.pet.getSettings()) || {};
-  if (!c.apiUrl) tip('点右上角 ⚙ 填接口地址。本机有 Ollama 就填 localhost:11434，用云端 API 填地址+Key。');
-  else tip('她醒着。打字、🎤 说话、👁 看屏幕都行。');
+  if (!c.apiKey) tip('点右上角 ⚙ 填 API Key 才能说话。');
+  else tip('她醒着。打字、🎤 说话、👁 看屏幕、⬚ 圈一块都行。');
   $('inp').focus();
 })();

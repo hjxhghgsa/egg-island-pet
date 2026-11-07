@@ -198,6 +198,12 @@ function buildTray() {
 }
 
 app.whenReady().then(async () => {
+  // 语音识别要麦克风权限
+  const { session } = require('electron');
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
+    cb(permission === 'media' || permission === 'audioCapture' || permission === 'microphone');
+  });
+
   const ok = await ensureThreeCore();
   if (!ok && !fs.existsSync(THREE_CORE)) {
     dialog.showErrorBox('缺少运行库',
@@ -206,6 +212,11 @@ app.whenReady().then(async () => {
 
   createWindow();
   buildTray();
+
+  // 打包后按设置开机自启（开发模式不自启）
+  if (app.isPackaged && readSettings().openAtLogin) {
+    try { app.setLoginItemSettings({ openAtLogin: true }); } catch {}
+  }
 
   try {
     const ok = globalShortcut.register(SUMMON_KEY, toggleVisible);
@@ -227,18 +238,28 @@ app.whenReady().then(async () => {
       } catch (e) { console.error('[music-test fail]', e.message); }
     }, 5000);
   }
+  if (process.env.PET_SNIP) {
+    setTimeout(async () => {
+      try {
+        await chatWin.webContents.executeJavaScript(`document.getElementById('snipBtn').click(); 'ok'`);
+        console.log('[snip] clicked, windows =', BrowserWindow.getAllWindows().length);
+      } catch (e) { console.error('[snip fail]', e.message); }
+    }, 6000);
+  }
   if (process.env.PET_TEST) {
     setTimeout(async () => {
       try {
-        const r = await chatWin.webContents.executeJavaScript(`JSON.stringify({
-          voices: (speechSynthesis.getVoices()||[]).filter(v=>/zh|Chinese/i.test(v.lang+v.name)).map(v=>v.name).slice(0,4),
-          speechRec: !!(window.SpeechRecognition||window.webkitSpeechRecognition),
-          eye: !!document.getElementById('eye'),
-          mic: !!document.getElementById('mic')
-        })`);
-        console.log('[chat-test]', r);
-      } catch (e) { console.error('[chat-test fail]', e.message); }
-    }, 8000);
+        const r = await chatWin.webContents.executeJavaScript(`
+          (async () => {
+            document.getElementById('inp').value = '你好，一句话介绍你自己';
+            document.getElementById('send').click();
+            await new Promise(r => setTimeout(r, 14000));
+            return document.getElementById('log').innerText;
+          })()
+        `);
+        console.log('[chat-e2e]', String(r).replace(/\\s+/g, ' ').slice(0, 300));
+      } catch (e) { console.error('[chat-e2e fail]', e.message); }
+    }, 7000);
   }
   if (process.env.PET_SHOT) {
     setTimeout(async () => {
@@ -337,13 +358,20 @@ function openChat() {
   }
   const b = win ? win.getBounds() : { x: 1200, y: 600 };
   const { workArea } = screen.getPrimaryDisplay();
-  const W = 404, H = 572;
-  // 挨着宠物站在它左边，底边对齐
+  const W = 360, H = 500;
+  // 直接贴右下角
+  const chatX = workArea.x + workArea.width - W - 16;
+  const chatY = workArea.y + workArea.height - H - 16;
+
+  // 聊天时把她收起来，免得两块重叠挡住了别人的窗口
+  const petWasVisible = !!(win && win.isVisible());
+  if (petWasVisible) win.hide();
+
   chatWin = new BrowserWindow({
     width: W,
     height: H,
-    x: Math.max(workArea.x + 12, b.x - W - 12),
-    y: Math.max(workArea.y + 12, Math.min(b.y + b.height - H, workArea.y + workArea.height - H - 12)),
+    x: chatX,
+    y: chatY,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -360,7 +388,14 @@ function openChat() {
   });
   chatWin.setMenu(null);
   chatWin.loadFile(path.join(__dirname, 'renderer', 'chat.html'));
-  chatWin.on('closed', () => { chatWin = null; });
+  chatWin.on('closed', () => {
+    chatWin = null;
+    // 关掉聊天后把她放回来
+    if (petWasVisible && win && !win.isDestroyed()) {
+      win.show();
+      win.setAlwaysOnTop(true, 'screen-saver');
+    }
+  });
 }
 
 ipcMain.on('open-chat', openChat);
@@ -411,6 +446,75 @@ ipcMain.on('open-music-folder', () => {
   shell.openPath(musicDir());
 });
 
+// 框选截图：先抓全屏，再开一层全屏选择器，选完裁剪
+let snipWin = null;
+let snipShot = null;
+let snipResolve = null;
+
+ipcMain.handle('snip-screen', async () => {
+  const disp = screen.getPrimaryDisplay();
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: disp.size.width, height: disp.size.height }
+  });
+  if (!sources.length) throw new Error('拿不到屏幕');
+  snipShot = sources[0].thumbnail;
+
+  if (snipWin) { try { snipWin.close(); } catch {} snipWin = null; }
+
+  snipWin = new BrowserWindow({
+    x: disp.bounds.x,
+    y: disp.bounds.y,
+    width: disp.bounds.width,
+    height: disp.bounds.height,
+    frame: false,
+    transparent: true,
+    hasShadow: false,
+    resizable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    fullscreenable: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  snipWin.setAlwaysOnTop(true, 'screen-saver');
+  snipWin.setIgnoreMouseEvents(false);
+  snipWin.loadFile(path.join(__dirname, 'renderer', 'snip.html'));
+  snipWin.on('closed', () => {
+    snipWin = null;
+    if (snipResolve) { snipResolve(null); snipResolve = null; }
+  });
+
+  return new Promise((resolve) => { snipResolve = resolve; });
+});
+
+ipcMain.on('snip-done', (_e, rect) => {
+  const finish = (val) => {
+    if (snipWin) { try { snipWin.close(); } catch {} snipWin = null; }
+    if (snipResolve) { snipResolve(val); snipResolve = null; }
+  };
+  if (!rect || !snipShot) return finish(null);
+
+  try {
+    const size = snipShot.getSize();
+    const disp = screen.getPrimaryDisplay();
+    // thumbnail 是按逻辑像素抓的，和选择器的坐标同一套
+    const k = size.width / disp.size.width;
+    const x = Math.max(0, Math.round(rect.x * k));
+    const y = Math.max(0, Math.round(rect.y * k));
+    const w = Math.max(1, Math.min(Math.round(rect.w * k), size.width - x));
+    const h = Math.max(1, Math.min(Math.round(rect.h * k), size.height - y));
+    const cropped = snipShot.crop({ x, y, width: w, height: h });
+    finish(cropped.toDataURL());
+  } catch (err) {
+    console.error('[snip] crop failed', err.message);
+    finish(null);
+  }
+});
+
 // 截当前屏幕，返回 base64，供视觉模型看
 ipcMain.handle('capture-screen', async () => {  const sources = await desktopCapturer.getSources({
     types: ['screen'],
@@ -433,13 +537,24 @@ ipcMain.handle('chat', async (_e, messages) => {
   const res = await fetch(base + '/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
-    body: JSON.stringify({ model, messages, stream: false, temperature: 0.8 }),
+    body: JSON.stringify({
+      model,
+      messages,
+      stream: false,
+      max_tokens: 1024,
+      temperature: 0.8,
+      reasoning_effort: 'low'
+    }),
     signal: AbortSignal.timeout(60000)
   });
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error('HTTP ' + res.status + ' ' + (t.slice(0, 120) || res.statusText));
+  }
   const j = await res.json();
-  const out = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-  if (!out) throw new Error('接口没返回内容');
+  const msg = j && j.choices && j.choices[0] && j.choices[0].message;
+  const out = (msg && msg.content) || '';
+  if (!out.trim()) throw new Error('接口没返回内容（可能 token 用完了）');
   return out.trim();
 });
 
