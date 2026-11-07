@@ -226,6 +226,28 @@ app.whenReady().then(async () => {
   }
 
   // 调试：PET_SHOT=<路径> 时抓一张桌面合成图后退出
+  if (process.env.PET_SNIP_DRAW) {
+    setTimeout(async () => {
+      try {
+        const r = await snipWin.webContents.executeJavaScript(`
+          (() => {
+            const cx = innerWidth * 0.5, cy = innerHeight * 0.5;
+            window.dispatchEvent(new MouseEvent('mousedown', { clientX: cx + 130, clientY: cy, button: 0 }));
+            for (let i = 0; i <= 60; i++) {
+              const a = (i / 60) * Math.PI * 2;
+              window.dispatchEvent(new MouseEvent('mousemove', {
+                clientX: cx + Math.cos(a) * 130,
+                clientY: cy + Math.sin(a) * 95
+              }));
+            }
+            window.dispatchEvent(new MouseEvent('mouseup', {}));
+            return 'drawn';
+          })()
+        `);
+        console.log('[draw]', r);
+      } catch (e) { console.error('[draw fail]', e.message); }
+    }, 9500);
+  }
   if (process.env.PET_CHAT) setTimeout(() => openChat(), 3500);
   if (process.env.PET_SUMMON) setTimeout(() => { summon(); console.log('[summon] called'); }, 6000);
   if (process.env.PET_MUSIC) {
@@ -486,19 +508,22 @@ ipcMain.handle('tts', async (_e, text) => {
   }
 });
 
-// 框选截图：先抓全屏，再开一层全屏选择器，选完裁剪
+// 圈选：全屏截图传给选择器，用户在那边画套索、自己裁好再回传
 let snipWin = null;
-let snipShot = null;
 let snipResolve = null;
 
 ipcMain.handle('snip-screen', async () => {
   const disp = screen.getPrimaryDisplay();
+  const dpr = disp.scaleFactor || 1;
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
-    thumbnailSize: { width: disp.size.width, height: disp.size.height }
+    thumbnailSize: {
+      width: Math.round(disp.bounds.width * dpr),
+      height: Math.round(disp.bounds.height * dpr)
+    }
   });
   if (!sources.length) throw new Error('拿不到屏幕');
-  snipShot = sources[0].thumbnail;
+  const shot = sources[0].thumbnail.toDataURL();
 
   if (snipWin) { try { snipWin.close(); } catch {} snipWin = null; }
 
@@ -522,6 +547,10 @@ ipcMain.handle('snip-screen', async () => {
   });
   snipWin.setAlwaysOnTop(true, 'screen-saver');
   snipWin.setIgnoreMouseEvents(false);
+
+  snipWin.webContents.once('did-finish-load', () => {
+    if (snipWin && !snipWin.isDestroyed()) snipWin.webContents.send('snip-image', shot);
+  });
   snipWin.loadFile(path.join(__dirname, 'renderer', 'snip.html'));
   snipWin.on('closed', () => {
     snipWin = null;
@@ -531,28 +560,9 @@ ipcMain.handle('snip-screen', async () => {
   return new Promise((resolve) => { snipResolve = resolve; });
 });
 
-ipcMain.on('snip-done', (_e, rect) => {
-  const finish = (val) => {
-    if (snipWin) { try { snipWin.close(); } catch {} snipWin = null; }
-    if (snipResolve) { snipResolve(val); snipResolve = null; }
-  };
-  if (!rect || !snipShot) return finish(null);
-
-  try {
-    const size = snipShot.getSize();
-    const disp = screen.getPrimaryDisplay();
-    // thumbnail 是按逻辑像素抓的，和选择器的坐标同一套
-    const k = size.width / disp.size.width;
-    const x = Math.max(0, Math.round(rect.x * k));
-    const y = Math.max(0, Math.round(rect.y * k));
-    const w = Math.max(1, Math.min(Math.round(rect.w * k), size.width - x));
-    const h = Math.max(1, Math.min(Math.round(rect.h * k), size.height - y));
-    const cropped = snipShot.crop({ x, y, width: w, height: h });
-    finish(cropped.toDataURL());
-  } catch (err) {
-    console.error('[snip] crop failed', err.message);
-    finish(null);
-  }
+ipcMain.on('snip-done', (_e, dataUrl) => {
+  if (snipWin) { try { snipWin.close(); } catch {} snipWin = null; }
+  if (snipResolve) { snipResolve(dataUrl || null); snipResolve = null; }
 });
 
 // 截当前屏幕，返回 base64，供视觉模型看

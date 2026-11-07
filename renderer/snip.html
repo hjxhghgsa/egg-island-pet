@@ -6,80 +6,166 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%; overflow: hidden;
-    background: rgba(0,0,0,.28);
+    background: transparent;
     cursor: crosshair; user-select: none;
     font: 13px "Microsoft YaHei", sans-serif;
   }
-  #box {
-    position: absolute; display: none;
-    border: 1.5px solid #4a9eff;
-    background: rgba(74,158,255,.10);
-    box-shadow: 0 0 0 9999px rgba(0,0,0,.30);
-  }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   #hint {
     position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,.68); color: #fff;
+    background: rgba(0,0,0,.7); color: #fff;
     padding: 7px 16px; border-radius: 999px; font-size: 12.5px;
-    white-space: nowrap;
-  }
-  #size {
-    position: absolute; padding: 3px 8px; border-radius: 5px;
-    background: rgba(0,0,0,.72); color: #fff; font-size: 11px;
-    display: none;
+    white-space: nowrap; pointer-events: none;
   }
 </style>
 </head>
 <body>
-<div id="hint">拖一个框圈出要问的部分 · Esc 取消</div>
-<div id="box"></div>
-<div id="size"></div>
+<canvas id="cv"></canvas>
+<div id="hint">按住鼠标，把要问的地方圈起来（任意形状都可）· Esc 取消</div>
 <script>
-  const box = document.getElementById('box');
-  const sizeTag = document.getElementById('size');
-  let sx = 0, sy = 0, dragging = false;
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const hintEl = document.getElementById('hint');
 
-  function draw(x, y) {
-    const left = Math.min(sx, x);
-    const top = Math.min(sy, y);
-    const w = Math.abs(x - sx);
-    const h = Math.abs(y - sy);
-    box.style.display = 'block';
-    box.style.left = left + 'px';
-    box.style.top = top + 'px';
-    box.style.width = w + 'px';
-    box.style.height = h + 'px';
-    sizeTag.style.display = 'block';
-    sizeTag.textContent = w + ' × ' + h;
-    sizeTag.style.left = left + 'px';
-    sizeTag.style.top = Math.max(0, top - 24) + 'px';
-    return { x: left, y: top, w, h };
+  let bg = null;          // 全屏截图
+  let W = 0, H = 0;       // 图片像素尺寸
+  let path = [];          // 轨迹点（图片像素）
+  let drawing = false;
+  let dpr = 1;
+
+  function fit() {
+    dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(window.innerWidth * dpr);
+    cv.height = Math.round(window.innerHeight * dpr);
+    redraw();
+  }
+
+  function tracePath(c) {
+    c.beginPath();
+    path.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y)));
+    c.closePath();
+  }
+
+  function redraw() {
+    if (!bg) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.drawImage(bg, 0, 0, W, H);
+
+    // 整体压暗
+    ctx.fillStyle = 'rgba(0,0,0,.45)';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+
+    if (path.length > 1) {
+      // 路径内恢复原亮度
+      ctx.save();
+      tracePath(ctx);
+      ctx.clip();
+      ctx.drawImage(bg, 0, 0, W, H);
+      ctx.restore();
+
+      tracePath(ctx);
+      ctx.strokeStyle = '#4a9eff';
+      ctx.lineWidth = 2 * dpr;
+      ctx.stroke();
+    }
+  }
+
+  function toImg(ev) {
+    const rect = cv.getBoundingClientRect();
+    return {
+      x: ((ev.clientX - rect.left) / rect.width) * W,
+      y: ((ev.clientY - rect.top) / rect.height) * H
+    };
+  }
+
+  function bbox() {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+    for (const p of path) {
+      x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y);
+      x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y);
+    }
+    const bx = Math.max(0, Math.floor(x1));
+    const by = Math.max(0, Math.floor(y1));
+    return { x: bx, y: by, w: Math.min(W, Math.ceil(x2)) - bx, h: Math.min(H, Math.ceil(y2)) - by };
+  }
+
+  // 用套索路径做遮罩，裁出任意形状
+  function exportShape() {
+    const b = bbox();
+    if (b.w < 6 || b.h < 6) return null;
+
+    const out = document.createElement('canvas');
+    out.width = b.w;
+    out.height = b.h;
+    const octx = out.getContext('2d');
+    octx.drawImage(bg, b.x, b.y, b.w, b.h, 0, 0, b.w, b.h);
+
+    // 只保留路径内的像素
+    octx.globalCompositeOperation = 'destination-in';
+    octx.beginPath();
+    path.forEach((p, i) => {
+      const x = p.x - b.x;
+      const y = p.y - b.y;
+      if (i) octx.lineTo(x, y); else octx.moveTo(x, y);
+    });
+    octx.closePath();
+    octx.fillStyle = '#fff';
+    octx.fill();
+    octx.globalCompositeOperation = 'source-over';
+
+    // 边长控制在 900 内，省 token
+    const k = Math.min(1, 900 / Math.max(b.w, b.h));
+    if (k < 1) {
+      const s = document.createElement('canvas');
+      s.width = Math.round(b.w * k);
+      s.height = Math.round(b.h * k);
+      s.getContext('2d').drawImage(out, 0, 0, s.width, s.height);
+      return s.toDataURL('image/png');
+    }
+    return out.toDataURL('image/png');
   }
 
   window.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
-    dragging = true;
-    sx = e.clientX;
-    sy = e.clientY;
-    document.getElementById('hint').style.display = 'none';
+    if (e.button !== 0 || !bg) return;
+    drawing = true;
+    path = [toImg(e)];
+    hintEl.style.display = 'none';
+    redraw();
   });
 
   window.addEventListener('mousemove', (e) => {
-    if (dragging) draw(e.clientX, e.clientY);
+    if (!drawing) return;
+    const p = toImg(e);
+    const last = path[path.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) < 1.2) return;
+    path.push(p);
+    redraw();
   });
 
-  window.addEventListener('mouseup', (e) => {
-    if (!dragging) return;
-    dragging = false;
-    const r = draw(e.clientX, e.clientY);
-    if (r.w < 8 || r.h < 8) {
-      window.pet.snipDone(null);
-      return;
-    }
-    window.pet.snipDone(r);
+  window.addEventListener('mouseup', () => {
+    if (!drawing) return;
+    drawing = false;
+    if (path.length < 3) { window.pet.snipDone(null); return; }
+    const data = exportShape();
+    window.pet.snipDone(data || null);
   });
 
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') window.pet.snipDone(null);
+  });
+
+  window.addEventListener('resize', fit);
+
+  // 主进程传来全屏截图
+  window.pet.onSnipImage((dataUrl) => {
+    const img = new Image();
+    img.onload = () => {
+      bg = img;
+      W = img.width;
+      H = img.height;
+      fit();
+    };
+    img.src = dataUrl;
   });
 </script>
 </body>

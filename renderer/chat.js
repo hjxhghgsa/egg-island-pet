@@ -135,14 +135,50 @@ $('eye').onclick = async () => {
 };
 
 /* ---------------- 圈一块问她 ---------------- */
+function showSnipPreview(data) {
+  const wrap = document.createElement('div');
+  wrap.className = 'snip-wrap';
+
+  const img = document.createElement('img');
+  img.src = data;
+  img.className = 'snip-img';
+
+  const row = document.createElement('div');
+  row.className = 'snip-row';
+
+  const askBtn = document.createElement('button');
+  askBtn.className = 'snip-btn primary';
+  askBtn.textContent = '这是什么';
+  askBtn.onclick = () => {
+    wrap.remove();
+    bubble('这是什么？', 'me');
+    ask('这是什么？简短说说。');
+  };
+
+  const dropBtn = document.createElement('button');
+  dropBtn.className = 'snip-btn';
+  dropBtn.textContent = '不要了';
+  dropBtn.onclick = () => {
+    wrap.remove();
+    lastShot = null;
+    tip('已取消');
+  };
+
+  row.append(askBtn, dropBtn);
+  wrap.append(img, row);
+  logEl.appendChild(wrap);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
 $('snipBtn').onclick = async () => {
   if (busy) return;
   try {
     const data = await window.pet.snipScreen();
     if (!data) return;
     lastShot = data;
-    bubble('圈了一块地方 ⬚', 'me');
-    await ask('我圈出来的这块是什么？简单说说。');
+    showSnipPreview(data);
+    tip('圈好了。说你想拿这块干什么，或者点上面的按钮');
+    $('inp').focus();
   } catch (err) {
     tip('圈选失败：' + (err.message || err));
   }
