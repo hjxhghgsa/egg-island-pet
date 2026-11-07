@@ -1453,14 +1453,13 @@ function tick() {
       spinner.rotation.x += (0 - spinner.rotation.x) * Math.min(1, dt * 6);
     }
 
-    // 打字：两只手抬到身前，快速交替点动，像在敲键盘
+    // 打字反应：这个模型手藏在蓬蓬裙后面，抬手只会看着像「指人」，
+    // 所以改成跟着敲字节奏轻轻点头 + 身体微颤 —— 反而更像「她在跟着你打字」。
     if (typingHeat > 0.02) {
       const k = typingHeat;
-      for (const arm of rig.arms) {
-        const ph = t * 15 + (arm.side === 'Left' ? 0 : Math.PI);
-        pitchBone(rig, arm.upper, 0.95 * k, 'z');
-        pitchBone(rig, arm.lower, (0.52 + Math.sin(ph) * 0.26) * k, 'z');
-      }
+      const ph = t * 11;
+      pitchBone(rig, rig.head, Math.sin(ph) * 0.075 * k, 'x');
+      pitchBone(rig, rig.chest, Math.sin(ph + 0.6) * 0.03 * k, 'x');
     }
 
     // 扑击：两条胳膊一起往前伸，抓空了再收回来
@@ -1490,7 +1489,19 @@ function tick() {
     lastActSent = act;
   }
 
-  // 停止打字后 0.4 秒把手放回去
+  // 打字时每 0.7 秒在身前飘一颗小星
+  if (typingHeat > 0.3) {
+    typeFxTimer -= dt;
+    if (typeFxTimer <= 0) {
+      typeFxTimer = 0.6 + Math.random() * 0.5;
+      sparks.burst({ x: rnd(-0.18, 0.18), y: 0.72, z: 0.22 }, {
+        n: 2, colors: ['#fff2c4', '#ffd9ee'], speed: 0.25, up: 0.8,
+        sizeMin: 4, sizeMax: 7, lifeMin: 0.5, lifeMax: 0.9
+      });
+    }
+  }
+
+  // 停止打字后 0.4 秒放开
   if (typingHeat > 0 && performance.now() - typingAt > 400) {
     typingHeat = Math.max(0, typingHeat - dt * 3);
   }
@@ -1595,6 +1606,7 @@ window.pet?.onSwitchModel((k) => {
 window.pet?.onToggleMusic(() => { toggleMusic(); });
 // 打字反应：主进程只告诉我们「还在打 / 停了」，不含任何键位内容
 let typingHeat = 0;
+let typeFxTimer = 0;
 let typingAt = 0;
 window.pet?.onTyping?.((d) => {
   typingHeat = d && d.stop ? 0 : 1;

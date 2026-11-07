@@ -492,6 +492,14 @@ app.whenReady().then(async () => {
     }, 5000);
   }
 
+  // 调试：PET_TYPE_DEMO=1 持续发「正在打字」，方便截图看手部动作
+  if (process.env.PET_TYPE_DEMO) {
+    setTimeout(() => {
+      const t = setInterval(() => sendWin('typing', { stop: false }), 120);
+      setTimeout(() => { clearInterval(t); sendWin('typing', { stop: true }); }, 9000);
+    }, 4000);
+  }
+
   // 调试：PET_CLICK=1 模拟连续点击，验证单点/双击/连击识别
   if (process.env.PET_CLICK) {
     setTimeout(async () => {
