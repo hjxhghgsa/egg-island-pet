@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -150,6 +150,19 @@ app.whenReady().then(async () => {
 
   // 调试：PET_SHOT=<路径> 时抓一张桌面合成图后退出
   if (process.env.PET_CHAT) setTimeout(() => openChat(), 3500);
+  if (process.env.PET_TEST) {
+    setTimeout(async () => {
+      try {
+        const r = await chatWin.webContents.executeJavaScript(`JSON.stringify({
+          voices: (speechSynthesis.getVoices()||[]).filter(v=>/zh|Chinese/i.test(v.lang+v.name)).map(v=>v.name).slice(0,4),
+          speechRec: !!(window.SpeechRecognition||window.webkitSpeechRecognition),
+          eye: !!document.getElementById('eye'),
+          mic: !!document.getElementById('mic')
+        })`);
+        console.log('[chat-test]', r);
+      } catch (e) { console.error('[chat-test fail]', e.message); }
+    }, 8000);
+  }
   if (process.env.PET_SHOT) {
     setTimeout(async () => {
       try {
@@ -242,17 +255,21 @@ function openChat() {
     return;
   }
   const b = win ? win.getBounds() : { x: 1200, y: 600 };
-  const W = 380, H = 520;
+  const { workArea } = screen.getPrimaryDisplay();
+  const W = 404, H = 572;
+  // 挨着宠物站在它左边，底边对齐
   chatWin = new BrowserWindow({
     width: W,
     height: H,
-    x: Math.max(0, Math.min(b.x - W + 120, 4000)),
-    y: Math.max(0, b.y - H + 180),
+    x: Math.max(workArea.x + 12, b.x - W - 12),
+    y: Math.max(workArea.y + 12, Math.min(b.y + b.height - H, workArea.y + workArea.height - H - 12)),
     frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
     resizable: false,
     skipTaskbar: false,
     alwaysOnTop: true,
-    backgroundColor: '#fffaf3',
     icon: path.join(__dirname, 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -268,12 +285,25 @@ function openChat() {
 ipcMain.on('open-chat', openChat);
 ipcMain.on('close-chat', () => { if (chatWin) chatWin.close(); });
 
+// 截当前屏幕，返回 base64，供视觉模型看
+ipcMain.handle('capture-screen', async () => {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 1280, height: 800 }
+  });
+  if (!sources.length) throw new Error('拿不到屏幕');
+  return sources[0].thumbnail.toDataURL();
+});
+
 // 主进程转发请求，绕开渲染层 CORS
 ipcMain.handle('chat', async (_e, messages) => {
   const s = readSettings();
   const base = (s.apiUrl || 'http://localhost:11434/v1').replace(/\/+$/, '');
-  const model = s.apiModel || 'qwen2.5:7b';
   const key = s.apiKey || 'ollama';
+
+  // 带图的消息要用视觉模型
+  const hasImage = messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url'));
+  const model = hasImage && s.apiVision ? s.apiVision : (s.apiModel || 'qwen2.5:7b');
 
   const res = await fetch(base + '/chat/completions', {
     method: 'POST',

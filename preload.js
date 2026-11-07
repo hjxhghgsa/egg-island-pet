@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('pet', {
   openChat: () => ipcRenderer.send('open-chat'),
   closeChat: () => ipcRenderer.send('close-chat'),
   chat: (messages) => ipcRenderer.invoke('chat', messages),
+  captureScreen: () => ipcRenderer.invoke('capture-screen'),
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
   onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k))
 });

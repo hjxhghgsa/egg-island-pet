@@ -33,12 +33,28 @@ Electron + Three.js，透明置顶窗口，悬浮在屏幕角落。
 
 ## AI 对话
 
-双击角色打开聊天窗，点右上角 ⚙ 填接口（OpenAI 兼容格式）：
+双击角色打开聊天窗（半透明玻璃质感），点右上角 ⚙ 填接口（OpenAI 兼容格式）：
 
 - 本地 Ollama：`http://localhost:11434/v1`，模型填 `ollama list` 里的名字，Key 随便写
 - 云端：`https://api.deepseek.com/v1` + 你的 Key + `deepseek-chat`
 
 请求走主进程转发，绕开渲染层 CORS。
+
+### 三种输入方式
+
+| 方式 | 说明 |
+|---|---|
+| 打字 | Enter 发送，Shift+Enter 换行 |
+| 🎤 按住说话 | 用 Web Speech API。**Electron 内置识别要连 Google，国内基本不可用**，失败会提示，别指望它 |
+| 👁 看屏幕 | 截当前屏幕发给视觉模型。要在设置里填一个支持图片输入的模型（`glm-4v-flash` / `gpt-4o-mini` / `qwen-vl-max`），留空则用主模型 |
+
+### 语音朗读
+
+右上 🔊 开关。用系统 TTS（Windows 自带 Huihui / Kangkang / Yaoyao），离线可用，不花 token。
+
+### 做不到的
+
+**接不进 WorkBuddy**——它没有对外接口。她只能跟你配的模型 API 或本地 Ollama 说话。
 
 ## 开发
 
