@@ -20,61 +20,112 @@
   }
   #err.show { display: block; }
 
-  /* ---------- 特效层：纯 DOM，透明窗口里比 WebGL 精灵更醒目 ---------- */
+  /* ---------- 特效层：纯 DOM，透明窗口里比 WebGL 精灵更醒目 ----------
+     参考 React Bits 的 ClickSpark / Magic Rings / Particles，用原生 CSS 复刻：
+     发光星尘从一点放射、花开带一圈扩散光环、花瓣本身是渐变而不是文字符号。 */
   #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+
+  /* 星尘：柔光核心 + 十字星芒 + 放射拖尾 */
+  /* 透明 Electron 窗口里 clip-path / filter / mix-blend-mode 都会被 alpha 合成吃掉，
+     所以这里只用最老实的 border-radius + 实色渐变 + box-shadow，靠形状和尺寸取胜。 */
+  .fx-spark {
+    position: absolute; width: var(--sz, 11px); height: var(--sz, 11px);
+    border-radius: 50%;
+    background: radial-gradient(circle at 36% 34%, #fff 0%, var(--c) 52%, var(--c) 100%);
+    box-shadow: 0 0 7px 2px var(--c), 0 0 16px 5px var(--c);
+    will-change: transform, opacity;
+    animation: sparkFly var(--dur) cubic-bezier(.22,1,.36,1) var(--delay) forwards;
+  }
+  .fx-spark::before, .fx-spark::after {
+    content: ''; position: absolute; left: 50%; top: 50%;
+    background: #fff; opacity: .9; border-radius: 2px;
+    transform: translate(-50%,-50%);
+    box-shadow: 0 0 6px 1px var(--c);
+  }
+  .fx-spark::before { width: 19px; height: 2px; }
+  .fx-spark::after  { width: 2px; height: 19px; }
+  @keyframes sparkFly {
+    0%   { transform: translate(0,0) scale(.2) rotate(0deg); opacity: 0; }
+    14%  { opacity: 1; }
+    62%  { opacity: .9; }
+    100% { transform: translate(var(--dx), var(--dy)) scale(.5) rotate(var(--rot)); opacity: 0; }
+  }
+
+  /* 文字类（Zzz）保留，其余一律走星尘 */
   .fx-bit {
     position: absolute; line-height: 1; will-change: transform, opacity;
-    text-shadow: 0 0 9px currentColor, 0 2px 5px rgba(120,60,90,.28);
-    animation: fxFloat var(--dur) cubic-bezier(.2,.72,.3,1) var(--delay) forwards;
+    text-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
+    animation: fxFloat var(--dur) cubic-bezier(.22,1,.36,1) var(--delay) forwards;
   }
   @keyframes fxFloat {
     0%   { transform: translate(0,0) scale(.4) rotate(0deg); opacity: 0; }
     16%  { opacity: 1; }
     72%  { opacity: 1; }
-    100% { transform: translate(var(--dx), var(--dy)) scale(1.18) rotate(var(--rot)); opacity: 0; }
+    100% { transform: translate(var(--dx), var(--dy)) scale(1.12) rotate(var(--rot)); opacity: 0; }
   }
 
-  /* 花开：六片花瓣从中心展开再淡出 */
+  /* 花开：渐变花瓣 + 一圈向外扩散的柔光环 + 星点花蕊 */
   .fx-flower {
     position: absolute; width: 0; height: 0;
-    animation: fxBloom var(--dur) ease-out forwards;
+    animation: fxBloom var(--dur) cubic-bezier(.22,1,.36,1) forwards;
+  }
+  .fx-flower::before {
+    content: ''; position: absolute; left: -15px; top: -15px;
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 1.5px solid var(--petal);
+    box-shadow: 0 0 14px var(--petal), inset 0 0 10px var(--petal);
+    animation: ringPulse var(--dur) cubic-bezier(.22,1,.36,1) forwards;
+  }
+  @keyframes ringPulse {
+    0%   { transform: scale(.15); opacity: 0; }
+    22%  { opacity: .8; }
+    100% { transform: scale(1.9); opacity: 0; }
   }
   .fx-flower i {
-    position: absolute; left: -5px; top: -11px; width: 10px; height: 14px;
-    border-radius: 60% 60% 55% 55%;
-    background: var(--petal);
-    box-shadow: 0 0 8px var(--petal);
-    transform-origin: 50% 11px;
-    animation: petalOpen var(--dur) cubic-bezier(.2,.8,.3,1) forwards;
+    position: absolute; left: -5px; top: -13px; width: 10px; height: 16px;
+    border-radius: 62% 62% 48% 48% / 80% 80% 30% 30%;
+    background: linear-gradient(180deg, #fff 0%, var(--petal) 55%, var(--petal) 100%);
+    box-shadow: 0 0 9px var(--petal), inset 0 2px 3px rgba(255,255,255,.9);
+    transform-origin: 50% 13px;
+    animation: petalOpen var(--dur) cubic-bezier(.22,1,.36,1) forwards;
   }
   .fx-flower b {
-    position: absolute; left: -3.5px; top: -3.5px; width: 7px; height: 7px;
-    border-radius: 50%; background: #fff6c9; box-shadow: 0 0 9px #ffd76e;
-    animation: corePop var(--dur) ease-out forwards;
+    position: absolute; left: -3px; top: -3px; width: 6px; height: 6px;
+    border-radius: 50%; background: #fffaf0;
+    box-shadow: 0 0 8px 2px #ffe9a8, 0 0 16px 4px #ffd76e;
+    animation: corePop var(--dur) cubic-bezier(.22,1,.36,1) forwards;
   }
   @keyframes petalOpen {
     0%   { transform: rotate(var(--a)) translateY(0) scale(.05); opacity: 0; }
-    32%  { transform: rotate(var(--a)) translateY(-9px) scale(1); opacity: 1; }
+    30%  { transform: rotate(var(--a)) translateY(-10px) scale(1); opacity: 1; }
     74%  { opacity: 1; }
-    100% { transform: rotate(var(--a)) translateY(-11px) scale(.86); opacity: 0; }
+    100% { transform: rotate(var(--a)) translateY(-12px) scale(.86); opacity: 0; }
   }
   @keyframes corePop {
-    0% { transform: scale(.1); opacity: 0; }
-    30% { transform: scale(1); opacity: 1; }
-    74% { opacity: 1; }
+    0%   { transform: scale(.1); opacity: 0; }
+    28%  { transform: scale(1); opacity: 1; }
+    74%  { opacity: 1; }
     100% { opacity: 0; }
   }
-  @keyframes fxBloom { 0% { opacity: 0; } 18% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes fxBloom { 0% { opacity: 0; } 16% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
 
-  /* 飘落的花瓣 */
+  /* 飘落的花瓣：实体渐变花瓣，不再是 ❀ 字符 */
   .fx-flake {
-    position: absolute; line-height: 1; text-shadow: 0 0 8px currentColor;
-    animation: flakeFall var(--dur) linear var(--delay) forwards;
+    position: absolute; display: block; width: 11px; height: 16px;
+    border-radius: 70% 70% 45% 45% / 80% 80% 30% 30%;
+    background: linear-gradient(160deg, #fff 0%, var(--c) 65%);
+    box-shadow: 0 0 8px var(--c);
+    animation: flakeFall var(--dur) cubic-bezier(.3,.5,.6,1) var(--delay) forwards;
   }
   @keyframes flakeFall {
-    0%   { transform: translate(0,0) rotate(0deg); opacity: 0; }
+    0%   { transform: translate(0,0) rotate(0deg) scale(var(--s,1)); opacity: 0; }
     12%  { opacity: .95; }
-    100% { transform: translate(var(--dx), 250px) rotate(320deg); opacity: 0; }
+    100% { transform: translate(var(--dx), 250px) rotate(320deg) scale(var(--s,1)); opacity: 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fx-spark, .fx-bit, .fx-flower, .fx-flower i, .fx-flower b,
+    .fx-flower::before, .fx-flake { animation-duration: 1ms !important; }
   }
 
   /* 说话气泡：半透明玻璃 + 柔光 + 指向角色的小尖角 */

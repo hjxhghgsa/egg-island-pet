@@ -270,6 +270,13 @@ app.whenReady().then(async () => {
   }
   if (process.env.PET_CHAT) setTimeout(() => openChat(), 3500);
   if (process.env.PET_SUMMON) setTimeout(() => { summon(); console.log('[summon] called'); }, 6000);
+  // 调试：PET_MODEL=cake 走一次真实的「换个角色」IPC 路径
+  if (process.env.PET_MODEL) {
+    setTimeout(() => {
+      if (win && !win.isDestroyed()) win.webContents.send('switch-model', process.env.PET_MODEL);
+      console.log('[model] switch ->', process.env.PET_MODEL);
+    }, 5000);
+  }
   if (process.env.PET_MUSIC) {
     setTimeout(async () => {
       try {
@@ -827,7 +834,7 @@ ipcMain.on('context-menu', () => {
       label: '小蛋助手',
       submenu: [
         { label: '看看我在干嘛（截屏问 AI）', click: () => win && win.webContents.send('pet-look') },
-        { label: '复制的内容帮我看看', click: () => win && win.webContents.send('pet-clip') },
+        { label: '复制的内容帮我看 · 自动识别', click: () => win && win.webContents.send('pet-clip') },
         { type: 'separator' },
         { label: '开始专注 25 分钟', click: startPomodoro },
         { label: '停止专注', click: () => { stopPomodoro(); petSay('好，先不计时啦'); } },

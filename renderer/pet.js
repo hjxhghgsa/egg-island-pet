@@ -75,20 +75,40 @@ holder.add(swingGroup);
 const woodMat = new THREE.MeshStandardMaterial({ color: 0xc08d5f, roughness: 0.82 });
 const ropeMat = new THREE.MeshStandardMaterial({ color: 0xe0cbaa, roughness: 0.9 });
 
+// 座板要对准髋部，不是脚踝。之前放在 y=0.19，人只能「站」在秋千前面。
+const SEAT_Y = 0.42;   // 默认值，加载模型后按各自髋部高度重算
+const BAR_Y = 1.46;
+const BASE_ROPE_LEN = BAR_Y - SEAT_Y;
+const swingRopes = [];
+
 const topBar = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 1.0, 10), woodMat);
 topBar.rotation.z = Math.PI / 2;
-topBar.position.y = 1.42;
+topBar.position.y = BAR_Y;
 swingGroup.add(topBar);
 
-const ropeLen = 1.23;
+const ropeLen = BASE_ROPE_LEN;
 for (const x of [-0.3, 0.3]) {
   const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, ropeLen, 6), ropeMat);
-  rope.position.set(x, 1.42 - ropeLen / 2, 0);
+  rope.position.set(x, BAR_Y - ropeLen / 2, -0.04);
   swingGroup.add(rope);
+  swingRopes.push(rope);
 }
-const seat = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.045, 0.3), woodMat);
-seat.position.y = 0.19;
+// 板子往后退一点，人坐在板前沿，避免从腰里穿过去
+const seat = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 0.30), woodMat);
+seat.position.set(0, SEAT_Y, -0.04);
 swingGroup.add(seat);
+
+// 蛋糕纯 hipY≈0.419、珠玉纯≈0.472，体型不一样；座板和绳长得跟着换，
+// 否则固定高度时总有一个人是悬在板上或陷进板里。
+function fitSwingToHips(hipY) {
+  const y = Math.max(0.25, Math.min(0.70, hipY - 0.035));
+  seat.position.y = y;
+  const len = BAR_Y - y;
+  for (const rope of swingRopes) {
+    rope.scale.y = len / BASE_ROPE_LEN;
+    rope.position.y = BAR_Y - len / 2;
+  }
+}
 
 /* ---------------- 伴随小精灵 ---------------- */
 function glowTexture(inner, outer) {
@@ -144,6 +164,16 @@ const fxLayer = document.getElementById('fx');
 const bubbleEl = document.getElementById('bubble');
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 
+// 骨骼俯仰必须绕「骨骼自己的局部 X 轴」，和 animation.js 的 rotate() 完全一致。
+// 之前直接拿世界 (1,0,0) 硬乘 quaternion：Mixamo 大腿/手臂初始朝向各不相同，
+// 于是腿被拧成 Z 字、脚尖朝天、手指整排翻起来 —— 这就是坐姿和手难看的根因。
+function pitchBone(rig, bone, angle) {
+  if (!rig || !bone || Math.abs(angle) < 1e-6) return;
+  const data = rig.joints.get(bone);
+  if (!data) return;
+  bone.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(data.x, angle));
+}
+
 const BIT_SETS = {
   love:  { chars: ['♥', '♡', '★', '✦'], colors: ['#ff6f9c', '#ff9ec4', '#ffc94a', '#fff0a8'] },
   star:  { chars: ['✦', '★', '✧', '⋆'], colors: ['#ffe58a', '#ffd166', '#fff6cf', '#ffb7d5'] },
@@ -151,25 +181,49 @@ const BIT_SETS = {
   zzz:   { chars: ['Z', 'z', 'Z'],        colors: ['#a9b8ff', '#c4b5ff', '#b8c6ff'] }
 };
 const PETAL_COLORS = ['#ff8fb4', '#ffc0d8', '#ffe1a8', '#c9a7ff', '#a8e6cf'];
+// 半透明色才能做出「发光」而不是「一块实色」，透明窗口上差别很明显
+const SPARK_COLORS = {
+  love:  ['#ff78a5', '#ffb8d4', '#ffd678', '#fff6cd'],
+  star:  ['#ffe48c', '#fff6cf', '#ffbade', '#ffffff'],
+  petal: ['#ff96be', '#ffcde1', '#ffe2b4', '#ceaaff'],
+  zzz:   ['#afbeff', '#cebeff', '#b8c6ff']
+};
 
+// ClickSpark 式放射星尘：从一点均匀散开，带轻微上飘和随机抖动
 function popBits(kind = 'love', n = 9) {
   if (!fxLayer) return;
+  const isText = kind === 'zzz';
+  const colors = SPARK_COLORS[kind] || SPARK_COLORS.love;
   const set = BIT_SETS[kind] || BIT_SETS.love;
+  const ox = 48 + (Math.random() - 0.5) * 10;
+  const oy = isText ? 30 : 44 + (Math.random() - 0.5) * 10;
+
   for (let i = 0; i < n; i++) {
     const el = document.createElement('span');
-    el.className = 'fx-bit';
-    el.textContent = set.chars[i % set.chars.length];
-    el.style.color = set.colors[i % set.colors.length];
-    el.style.left = (34 + Math.random() * 32) + '%';
-    el.style.top = (kind === 'zzz' ? 26 : 34) + Math.random() * 24 + '%';
-    el.style.fontSize = (15 + Math.random() * 13).toFixed(0) + 'px';
-    el.style.setProperty('--dx', ((Math.random() - 0.5) * 170).toFixed(0) + 'px');
-    el.style.setProperty('--dy', (-52 - Math.random() * 92).toFixed(0) + 'px');
-    el.style.setProperty('--rot', ((Math.random() - 0.5) * 90).toFixed(0) + 'deg');
-    el.style.setProperty('--dur', (0.95 + Math.random() * 0.6).toFixed(2) + 's');
-    el.style.setProperty('--delay', (Math.random() * 0.14).toFixed(2) + 's');
+    if (isText) {
+      el.className = 'fx-bit';
+      el.textContent = set.chars[i % set.chars.length];
+      el.style.color = colors[i % colors.length];
+      el.style.fontSize = (13 + Math.random() * 9).toFixed(0) + 'px';
+      el.style.setProperty('--dx', ((Math.random() - 0.5) * 60).toFixed(0) + 'px');
+      el.style.setProperty('--dy', (-40 - Math.random() * 50).toFixed(0) + 'px');
+      el.style.setProperty('--rot', ((Math.random() - 0.5) * 50).toFixed(0) + 'deg');
+    } else {
+      el.className = 'fx-spark';
+      const a = (Math.PI * 2 * i) / n + (Math.random() - 0.5) * 0.5;
+      const d = 34 + Math.random() * 46;
+      el.style.setProperty('--c', colors[i % colors.length]);
+      el.style.setProperty('--sz', (8 + Math.random() * 6).toFixed(1) + 'px');
+      el.style.setProperty('--dx', (Math.cos(a) * d).toFixed(0) + 'px');
+      el.style.setProperty('--dy', (Math.sin(a) * d - 16 - Math.random() * 14).toFixed(0) + 'px');
+      el.style.setProperty('--rot', ((Math.random() - 0.5) * 120).toFixed(0) + 'deg');
+    }
+    el.style.left = (ox + (Math.random() - 0.5) * 12).toFixed(1) + '%';
+    el.style.top = (oy + (Math.random() - 0.5) * 12).toFixed(1) + '%';
+    el.style.setProperty('--dur', (0.85 + Math.random() * 0.55).toFixed(2) + 's');
+    el.style.setProperty('--delay', (Math.random() * 0.16).toFixed(2) + 's');
     fxLayer.appendChild(el);
-    setTimeout(() => el.remove(), 2300);
+    setTimeout(() => el.remove(), 2100);
   }
 }
 
@@ -196,11 +250,10 @@ function petalFall(n = 5) {
   for (let i = 0; i < n; i++) {
     const el = document.createElement('span');
     el.className = 'fx-flake';
-    el.textContent = '❀';
-    el.style.color = PETAL_COLORS[i % PETAL_COLORS.length];
+    el.style.setProperty('--c', PETAL_COLORS[i % PETAL_COLORS.length]);
     el.style.left = (8 + Math.random() * 84) + '%';
     el.style.top = '-8%';
-    el.style.fontSize = (12 + Math.random() * 9).toFixed(0) + 'px';
+    el.style.setProperty('--s', (0.75 + Math.random() * 0.6).toFixed(2));
     el.style.setProperty('--dx', ((Math.random() - 0.5) * 80).toFixed(0) + 'px');
     el.style.setProperty('--dur', (1.8 + Math.random() * 1.1).toFixed(2) + 's');
     el.style.setProperty('--delay', (Math.random() * 0.8).toFixed(2) + 's');
@@ -277,7 +330,33 @@ async function lookAtScreen() {
   } finally { eggBusy = false; }
 }
 
-// 读剪贴板，给一句概括 + 建议：复制代码 / 报错 / 英文时很顺手
+/* 智能剪贴板：先认内容类型，再给对应的动作。
+   参考 GitHub 同类桌宠 Mintu / guyi-bot 的做法：复制代码就讲代码、
+   复制英文就翻译、复制 JSON 就说结构，而不是一律「概括一下」。 */
+function clipKind(raw) {
+  const s = String(raw || '').trim();
+  if (/^https?:\/\/\S+$/i.test(s)) return { key: 'url', label: '链接' };
+  if (/^[{[]/.test(s)) {
+    try { JSON.parse(s); return { key: 'json', label: 'JSON' }; } catch {}
+  }
+  if (/^\s*(def |class |import |from .+ import |function |const |let |var |public |#include|SELECT )/m.test(s) ||
+      /\b(Traceback|Error:|Exception|at [\w.]+\(|=>|::|;\s*$)/m.test(s)) {
+    return { key: 'code', label: '代码' };
+  }
+  const han = (s.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const ascii = (s.match(/[A-Za-z]/g) || []).length;
+  if (ascii > han * 2 + 8) return { key: 'en', label: '英文' };
+  return { key: 'zh', label: '文字' };
+}
+
+const CLIP_PROMPTS = {
+  url:  '你在读用户复制的一条网址。用一句不超过 40 字的中文，说明它大致是什么、点开前有什么值得留意的；看不出来就直说看不出来。不要复述网址。',
+  json: '你在读用户复制的一段 JSON。用一句不超过 40 字的中文说清顶层结构和用途；若字段命名或嵌套有明显问题顺手点一句。不要贴代码。',
+  code: '你在读用户复制的一段代码或报错。用一句不超过 40 字的中文说清它在做什么、最可能错在哪，并给一个能立刻试的修改方向。不要贴代码。',
+  en:   '你在读用户复制的一段英文。先用不超过 25 字给出中文翻译，再用一句话点出关键词或语法点，总共不超过 45 字。',
+  zh:   '你是桌面小助手「小蛋」。用一句不超过 40 字的中文概括用户复制的内容，并给一个实在的建议。不要长篇大论，不要复述全文。'
+};
+
 async function explainClipboard() {
   if (eggBusy) return;
   eggBusy = true;
@@ -286,14 +365,17 @@ async function explainClipboard() {
   try {
     const txt = await window.pet.readClipboard();
     if (!txt || !String(txt).trim()) { showBubble('剪贴板是空的呀', 2800); return; }
+    const kind = clipKind(txt);
+    window.__pet.clipKind = kind.key;
+    showBubble('是' + kind.label + '呀，我看看～', 2400);
     const reply = await window.pet.chat([
-      { role: 'system', content: '你是桌面小助手「小蛋」。用一句不超过 40 字的中文，概括用户复制的内容并给一个实在的建议。不要长篇大论，不要复述全文。' },
+      { role: 'system', content: CLIP_PROMPTS[kind.key] },
       { role: 'user', content: String(txt).slice(0, 3000) }
     ]);
     window.__pet.lastClip = String(reply).slice(0, 200);
     showBubble(String(reply).slice(0, 44), 6000);
-    window.pet.notify('小蛋读了你复制的内容', String(reply).slice(0, 180));
-    popBits('love', 5);
+    window.pet.notify('小蛋读了你复制的' + kind.label, String(reply).slice(0, 180));
+    popBits(kind.key === 'en' || kind.key === 'code' ? 'star' : 'love', 5);
   } catch (e) {
     window.__pet.lastClip = 'ERR ' + String((e && e.message) || e);
     showBubble('接口没连上，先看看设置～', 3400);
@@ -310,28 +392,15 @@ function softenHands(rig, waving, t) {
     const right = /Right/i.test(arm.side);
     const phase = right ? 0 : Math.PI;
     const w = waving && right ? 1 : 0;
-    if (arm.upper && w) {
-      arm.upper.quaternion.multiply(
-        new THREE.Quaternion().setFromAxisAngle(X_AXIS, -0.62 + Math.sin(t * 6.2) * 0.20)
-      );
-    }
-    if (arm.lower) {
-      arm.lower.quaternion.multiply(
-        new THREE.Quaternion().setFromAxisAngle(X_AXIS, -0.16 * w + Math.sin(t * 1.1 + phase) * 0.035)
-      );
-    }
-    if (arm.hand) {
-      arm.hand.quaternion.multiply(
-        new THREE.Quaternion().setFromAxisAngle(X_AXIS,
-          Math.sin(t * 1.3 + phase) * 0.05 + w * Math.sin(t * 6.2) * 0.09)
-      );
-    }
+    if (arm.upper && w) pitchBone(rig, arm.upper, -0.62 + Math.sin(t * 6.2) * 0.20);
+    if (arm.lower) pitchBone(rig, arm.lower, -0.16 * w + Math.sin(t * 1.1 + phase) * 0.035);
+    if (arm.hand) pitchBone(rig, arm.hand,
+      Math.sin(t * 1.3 + phase) * 0.05 + w * Math.sin(t * 6.2) * 0.09);
   }
-  // 手指轻轻收拢，避免僵直张开
+  // 手指逐节收拢、幅度递减，别整排一起翻
   for (const { bone } of rig.joints.values()) {
-    if (/Hand(Index|Middle|Ring|Pinky)/i.test(bone.name)) {
-      bone.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(X_AXIS, 0.09));
-    }
+    const m = /Hand(Index|Middle|Ring|Pinky)(\d)/i.exec(bone.name);
+    if (m) pitchBone(rig, bone, 0.055 * (4 - Number(m[2])) / 3);
   }
 }
 
@@ -347,6 +416,8 @@ let squash = 1;          // 落地压缩
 let yaw = 0;             // 手动旋转角（360° 自由转）
 let yawVel = 0;          // 旋转惯性
 let sitBlend = 0;        // 坐姿骨骼过渡
+let swingFxTimer = 0;    // 荡秋千时飘花瓣 / 星光的节奏
+let seatHipY = 0.472;    // 当前角色的髋部高度，换角色后重算座板
 let lastRotateAt = 0;    // 最后一次手动转的时间
 const TAU = Math.PI * 2;
 
@@ -413,6 +484,7 @@ window.__pet.getAct = () => act;
 window.__pet.yaw = () => yaw;
 window.__pet.setYaw = (v) => { yaw = v; yawVel = 0; lastRotateAt = performance.now(); };
 window.__pet.acts = ACTS.map((a) => a.name);
+window.__pet.model = () => currentKey;
 window.__pet.pop = (n = 9, kind = 'love') => popBits(kind, n);
 window.__pet.bloom = (n = 4) => {
   for (let i = 0; i < n; i++) {
@@ -471,21 +543,21 @@ function normalize(root, height) {
   root.updateMatrixWorld(true);
 }
 
-async function loadModel(modelKey) {
-  const info = MODELS[modelKey] || MODELS.cake;
-  rigReady = false;
-  if (modelRoot) {
-    spinner.remove(modelRoot);
-    modelRoot.traverse((o) => {
-      if (o.isMesh) {
-        o.geometry?.dispose?.();
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach((m) => { m?.map?.dispose?.(); m?.dispose?.(); });
-      }
-    });
-    modelRoot = null;
-  }
+function disposeModel(root) {
+  if (!root) return;
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.geometry?.dispose?.();
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    mats.forEach((m) => { m?.map?.dispose?.(); m?.dispose?.(); });
+  });
+}
 
+async function loadModel(modelKey, { announce = true } = {}) {
+  const info = MODELS[modelKey] || MODELS.cake;
+  // 原子切换：先把新模型完整加载 + 建好 rig，成功之后才摘掉旧的。
+  // 旧写法是先 dispose 旧模型再 await 加载，任何一次加载抖动都会让角色整个消失，
+  // 表现就是「另一个角色怎么没有了 / 用不了了」。
   const url = new URL('../models/' + info.file, import.meta.url).href;
   const gltf = await loader.loadAsync(url);
   const object = gltf.scene;
@@ -505,19 +577,49 @@ async function loadModel(modelKey) {
 
   // 复用蛋岛原站的程序化骨骼系统
   setupCharacterRig(holderLike);
+  const rig = holderLike.userData.islandRig;
+  if (rig?.hips) {
+    holderLike.updateWorldMatrix(true, true);
+    const hip = holderLike.worldToLocal(rig.hips.getWorldPosition(new THREE.Vector3()));
+    seatHipY = +hip.y.toFixed(3);
+    window.__pet.hipY = seatHipY;
+    fitSwingToHips(seatHipY);
+  }
 
+  // 走到这里才算成功
+  if (modelRoot) {
+    spinner.remove(modelRoot);
+    disposeModel(modelRoot);
+  }
   spinner.add(holderLike);
   modelRoot = holderLike;
   frameCamera(info.height);
   baseY = 0;
   jumpY = 0;
   jumpVel = 0;
+  sitBlend = 0;
   rigReady = true;
   currentKey = modelKey;
+  window.__pet.stage = 'ready:' + modelKey;   // 切模型后也要同步，别停在启动那次
   window.pet?.saveSettings({ model: modelKey });
 
-  // 出场弹一下
-  jumpVel = 1.6;
+  // 换角色给个明确反馈：以前一点提示都没有，用户以为点了没生效
+  if (announce) {
+    showBubble(info.label + ' 来啦~', 2800);
+    popBits('petal', 8);
+    eggBounce = 1;
+  }
+  jumpVel = 1.6;                              // 出场弹一下
+}
+
+async function switchTo(key) {
+  if (!MODELS[key] || key === currentKey) return;
+  try {
+    await loadModel(key);
+  } catch (err) {
+    window.__pet.error = 'switchModel: ' + String((err && (err.stack || err.message)) || err);
+    showBubble('这个角色没加载出来，先留着原来的～', 3800);
+  }
 }
 
 /* ---------------- 交互 ---------------- */
@@ -650,7 +752,7 @@ window.addEventListener('keydown', (ev) => {
   const n = parseInt(ev.key, 10);
   if (n >= 1 && n <= keys.length) {
     const k = keys[n - 1];
-    if (k !== currentKey) loadModel(k);
+    switchTo(k);
   }
 });
 
@@ -767,7 +869,8 @@ function tick() {
   if (fairyOn) {
     const spd = act === 'chase' ? 2.1 : 0.85;
     const fz = 0.44 + Math.cos(t * spd) * 0.06;
-    fairy.position.set(Math.sin(t * spd) * 0.20 + 0.20, 0.82 + Math.sin(t * 1.9) * 0.10, fz);
+    // 飘在身侧，别趴在头顶挡脸
+    fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
     fairyGlow.material.opacity = 0.30 + Math.sin(t * 4) * 0.08;
     if (eggRoot) {
       eggBounce = Math.max(0, eggBounce - dt * 1.8);
@@ -780,8 +883,8 @@ function tick() {
     fairyTrail.forEach((s, i) => {
       const tt = t * spd - (i + 1) * 0.16;
       s.position.set(
-        Math.sin(tt) * 0.20 + 0.20,
-        0.82 + Math.sin(tt / spd * 1.9) * 0.10,
+        Math.sin(tt) * 0.16 + 0.34,
+        0.66 + Math.sin(tt / spd * 1.9) * 0.09,
         0.44 + Math.cos(tt) * 0.06
       );
       s.material.opacity = 0.30 - i * 0.07;
@@ -804,6 +907,13 @@ function tick() {
     holder.position.y = Math.sin(t * 3.3) * 0.012;
     swingGroup.position.x = s * 0.055;
     spinner.position.x = s * 0.055;
+    // 荡的时候身边一直有花瓣和细星光，别让秋千只是几根光秃秃的圆柱
+    swingFxTimer -= dt;
+    if (swingFxTimer <= 0) {
+      petalFall(1);
+      if (Math.random() < 0.4) popBits('star', 2);
+      swingFxTimer = 1.2 + Math.random() * 1.3;
+    }
   } else {
     holder.rotation.z += (0 - holder.rotation.z) * Math.min(1, dt * 5);
     holder.position.y += (0 - holder.position.y) * Math.min(1, dt * 5);
@@ -864,9 +974,14 @@ function tick() {
   const wantSit = (act === 'swing' || act === 'sit' || act === 'sleep') ? 1 : 0;
   sitBlend += (wantSit - sitBlend) * Math.min(1, dt * 5);
   const floatLift = act === 'float' ? 0.12 + Math.sin(t * 1.3) * 0.06 : 0;
-  const seatDrop = act === 'swing' ? -0.18 : ((act === 'sit' || act === 'sleep') ? -0.13 * sitBlend : 0);
+  // 座板已经抬到髋部高度，人只需轻轻压实，别再把整个人往下拽 0.18
+  const seatDrop = act === 'swing' ? -0.035 * sitBlend
+    : ((act === 'sit' || act === 'sleep') ? -0.13 * sitBlend : 0);
 
   spinner.position.y = baseY + bob + jumpY + floatLift + seatDrop;
+  // 坐上去时身体微微往前，落在板前沿，而不是被板子从腰里穿过
+  const wantZ = act === 'swing' ? 0.08 * sitBlend : 0;
+  spinner.position.z += (wantZ - spinner.position.z) * Math.min(1, dt * 5);
   spinner.scale.set(
     1 + (1 - squash) * 0.55,
     squash,
@@ -913,14 +1028,14 @@ function tick() {
     });
 
     const rig = modelRoot.userData.islandRig;
-    // 坐姿：大腿前伸、小腿下垂。updateRig 每帧复位骨骼，所以叠在它后面
+    // 坐姿：绕骨骼自身局部轴，大腿前伸、小腿自然垂下、脚掌放松，荡的时候跟着轻晃
     if (rig && sitBlend > 0.002) {
+      const kick = act === 'swing' ? Math.sin(t * 1.65) * 0.10 : 0;
       for (const leg of rig.legs) {
-        for (const [bone, ang] of [[leg.upper, -1.05], [leg.lower, 1.30], [leg.foot, -0.20]]) {
-          if (bone) bone.quaternion.multiply(
-            new THREE.Quaternion().setFromAxisAngle(X_AXIS, ang * sitBlend)
-          );
-        }
+        const side = leg.side === 'Left' ? 1 : -1;
+        pitchBone(rig, leg.upper, (-1.32 + kick * 0.4) * sitBlend);
+        pitchBone(rig, leg.lower, (1.24 - kick * 0.35) * sitBlend);
+        pitchBone(rig, leg.foot, (-0.16 + kick * 0.45 + side * 0.015) * sitBlend);
       }
     }
     softenHands(rig, act === 'wave', t);
@@ -959,7 +1074,7 @@ async function loadEgg() {
   const s = (await window.pet?.getSettings()) || {};
   try {
     window.__pet.stage = 'loading:' + (s.model || 'cake');
-    await loadModel(s.model && MODELS[s.model] ? s.model : 'cake');
+    await loadModel(s.model && MODELS[s.model] ? s.model : 'cake', { announce: false });
     window.__pet.stage = 'ready:' + currentKey;
   } catch (err) {
     window.__pet.stage = 'failed';
@@ -974,11 +1089,11 @@ async function loadEgg() {
 })();
 
 window.pet?.onApplySettings((s) => {
-  if (s.model && MODELS[s.model] && s.model !== currentKey) loadModel(s.model);
+  if (s.model && MODELS[s.model] && s.model !== currentKey) switchTo(s.model);
 });
 
 window.pet?.onSwitchModel((k) => {
-  if (MODELS[k] && k !== currentKey) loadModel(k);
+  if (MODELS[k] && k !== currentKey) switchTo(k);
 });
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });

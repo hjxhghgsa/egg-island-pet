@@ -25,7 +25,9 @@
       "preload.js",
       "renderer/**/*",
       "vendor/**/*",
-      "models/**/*",
+      "models/character-cake.glb",
+      "models/character-jade.glb",
+      "models/pet-egg.glb",
       "icon.ico",
       "icon.png"
     ],
@@ -45,6 +47,7 @@
     }
   },
   "dependencies": {
-    "msedge-tts": "^2.1.1"
+    "msedge-tts": "^2.1.1",
+    "sherpa-onnx-node": "^2.0.1"
   }
 }
