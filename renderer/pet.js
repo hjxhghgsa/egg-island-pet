@@ -20,6 +20,7 @@ let currentKey = 'cake';
 
 /* ---------------- 渲染器 ---------------- */
 const canvas = document.getElementById('stage');
+const peekFrameEl = document.getElementById('peekFrame');   // 屏幕边上的门框沿
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -42,16 +43,23 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
 
 // 相机按模型高度自适应，人物和宠物都能占满画面约 3/4
-// camBase 保存「正常取景」的基准，探头时从这里插值到头部特写，松手再滑回来
-let camBase = { y: 1.35 * 0.56, z: 1.35 * 2.3, lookY: 1.35 * 0.5, headY: 1.35 * 0.90, clipY: 1.35 * 0.523 };
+// camBase 保存「正常取景」的基准，探头时从这里平移过去，松手再滑回来。
+// 注意：**不放大**。zoom 永远 1，头保持原来的大小，只是把取景框挪到屏幕边上。
+let camBase = {
+  y: 1.35 * 0.56, z: 1.35 * 2.3, lookY: 1.35 * 0.5,
+  headY: 1.35 * 0.999, clipY: 1.35 * 0.340, handY: 1.35 * 1.148, pivotY: 1.35 * 0.78
+};
 function frameCamera(height) {
   // 取景：人物占画面约 3/4，头顶和脚下都留出呼吸空间。
   // 2.0 倍距离时她占 89%，贴着上下边，看着闷；2.3 倍约 76%，最舒服。
-  // 探头特写：头顶 1.39、下巴 0.82、肩膀 0.8 以下。把镜头中心抬到 0.94h，
-  // 让 clipY 正好压在窗口下边界上 —— 身体被裁掉的断面藏在窗口外，看不见。
+  // 探头：__pet.probe() 实测模型 y 0.014~1.451、头骨 0.733、脸底 ≈0.55。
+  // zoom=1 时可见半高约 0.89，所以镜头中心 = clipY + 0.89，
+  // 裁剪面正好压在窗口下边界上，身体断面藏在窗口外；
+  // 头保持原始大小，落在窗口下半部、贴着屏幕那条边。
   camBase = {
     y: height * 0.56, z: height * 2.3, lookY: height * 0.5,
-    headY: height * 0.90, clipY: height * 0.523, pivotY: height * 0.78
+    headY: height * 0.999, clipY: height * 0.340,
+    handY: height * 1.148, pivotY: height * 0.78
   };
   camera.position.set(0, camBase.y, camBase.z);
   camera.lookAt(0, camBase.lookY, 0);
@@ -1233,6 +1241,33 @@ window.__pet.peekState = () => JSON.stringify({
   canvasW: innerWidth
 });
 
+// 调试探针：把模型包围盒和头骨投影成窗口像素，用来精确定「脸在哪一行」
+window.__pet.probe = () => {
+  if (!modelRoot) return 'no model';
+  const b = new THREE.Box3().setFromObject(modelRoot);
+  const pts = [];
+  for (const x of [b.min.x, b.max.x])
+    for (const y of [b.min.y, b.max.y])
+      for (const z of [b.min.z, b.max.z]) {
+        const p = new THREE.Vector3(x, y, z).project(camera);
+        pts.push([(p.x + 1) * 100, (1 - p.y) * 100]);
+      }
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const r = modelRoot.userData.islandRig;
+  let head = null;
+  if (r && r.head) {
+    const v = new THREE.Vector3(); r.head.getWorldPosition(v);
+    const p = v.clone().project(camera);
+    head = { worldY: +v.y.toFixed(3), px: +((p.x + 1) * 100).toFixed(1), py: +((1 - p.y) * 100).toFixed(1) };
+  }
+  return JSON.stringify({
+    worldBox: [+b.min.y.toFixed(3), +b.max.y.toFixed(3)],
+    screenBox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => +v.toFixed(1)),
+    head, camY: +camera.position.y.toFixed(3), clip: +camBase.clipY.toFixed(3),
+    act, sitBlend: +sitBlend.toFixed(2)
+  });
+};
+
 window.__pet.viewInfo = () => JSON.stringify({
   cam: [camera.position.x, camera.position.y, camera.position.z].map((v) => +v.toFixed(3)),
   zoom: +camera.zoom.toFixed(2),
@@ -1561,14 +1596,14 @@ function tick() {
      两只小手抬到额头上方、指尖弯曲半扒着上边框。 */
   const peekDir = peekEdge === 'left' ? -1 : 1;
   const pz = peekAmt < 0.002 ? 0 : peekAmt;    // 衰减到 0，正常取景就一帧都不碰相机
-  if (pz > 0 || camera.zoom !== 1) {
-    camera.zoom = 1 + 0.75 * pz;                // 1.75 倍特写：头上下都留安全边距，头顶上方还放得下两只手
-    const camX = -peekDir * 0.08 * pz;          // 镜头往内挪，头贴住屏幕边又不切到发梢
+  // zoom 恒为 1，头是原始大小；只靠「镜头平移 + 裁剪面」把身体藏到门框后。
+  // pz 归零后还要再跑一帧把镜头送回原位，所以守卫看的是相机高度而不是 zoom。
+  if (pz > 0 || Math.abs(camera.position.y - camBase.y) > 0.001) {
+    const camX = -peekDir * 0.50 * pz;          // 视野没被压缩，要挪 0.5 才能让头贴住屏幕边
     const camY = camBase.y + (camBase.headY - camBase.y) * pz;
     const lookY = camBase.lookY + (camBase.headY - camBase.lookY) * pz;
     camera.position.set(camX, camY, camBase.z);
     camera.lookAt(camX, lookY, 0);
-    camera.updateProjectionMatrix();
   }
 
   // 歪着的脑袋：整个人绕脚底转会把头甩出画面，所以按真实头中心补回横向位移
@@ -1585,8 +1620,11 @@ function tick() {
     const headX = holder.position.x - Math.sin(tilt) * camBase.pivotY;
     peekingHands.children.forEach((hand, i) => {
       const bob = Math.sin(t * 2.2 + i * 1.6) * 0.010;
-      hand.position.set(headX + (i ? 0.30 : -0.30),
-        camBase.headY + 0.30 * handsAmt + bob, 0.22);
+      // i=0 那只搭在靠屏幕边的门框上，另一只扶在头内侧；左右自动镜像
+      const hx = headX + (i ? -peekDir * 0.24 : peekDir * 0.30);
+      // 从头的高度慢慢抬到框沿，像撑着门框把脑袋探出来
+      const hy = camBase.handY - 0.18 * (1 - handsAmt) + bob;
+      hand.position.set(hx, hy, 0.22);
       hand.rotation.z = (i ? 0.34 : -0.34) + bob * 2;   // 手腕往内扣
       hand.scale.setScalar(0.85 + handsAmt * 0.15);
     });
@@ -1891,6 +1929,12 @@ function tick() {
   for (const s of fairyTrail) s.visible = fairy.visible;
   swingGroup.visible = act === 'swing' && peekHide;
   kbGroup.visible = (kbWant > 0 || kbGroup.position.y > 0.04) && peekHide;
+
+  // 屏幕边上的门框沿：有这条边才读得出「从框后探出头」
+  if (peekFrameEl) {
+    const frameCls = pz > 0.25 ? 'on ' + (peekEdge || '') : '';
+    if (peekFrameEl.className !== frameCls) peekFrameEl.className = frameCls;
+  }
 
   // 裁剪面从画面下方慢慢升上来，不会在贴边瞬间「咔」地切掉半个身子。
   // 到位后正好压在窗口下边界，断面藏在窗口外。

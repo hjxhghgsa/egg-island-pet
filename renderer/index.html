@@ -213,6 +213,27 @@
   #edgeHint.top::after { top: 0; opacity: 1; }
   #edgeHint.bottom::after { bottom: 0; top: auto; opacity: 1; transform: scaleY(-1); }
 
+  /* 门框：贴边探头时，屏幕最外侧立起一条很窄的框沿。
+     有这条边，脑袋才是「从门框后探出来」，而不是悬在窗口里的一颗头。 */
+  #peekFrame {
+    position: fixed; inset: 0; pointer-events: none; z-index: 5;
+    opacity: 0; transition: opacity .3s ease;
+  }
+  #peekFrame.on { opacity: 1; }
+  #peekFrame::before {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 9px;
+    background: linear-gradient(90deg,
+      rgba(255,255,255,.90) 0%, rgba(255,247,251,.60) 45%, rgba(255,240,248,.14) 100%);
+    border-right: 1px solid rgba(255,255,255,.82);
+    box-shadow: 3px 0 12px rgba(90,60,90,.16);
+  }
+  #peekFrame.left::before { left: 0; }
+  #peekFrame.right::before { right: 0; left: auto; transform: scaleX(-1); }
+  #peekFrame::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 0; height: 6px;
+    background: linear-gradient(180deg, rgba(255,255,255,.72), rgba(255,255,255,0));
+  }
+
   /* 连击数字：在她头顶弹一下再上飘淡出 */
   .fx-combo {
     position: absolute; left: 50%; top: 16%;
@@ -288,6 +309,7 @@
 <body>
 <canvas id="stage"></canvas>
 <div id="edgeHint"></div>
+<div id="peekFrame"></div>
 <div id="fx"></div>
 <div id="bubble"></div>
 <div id="err"></div>
