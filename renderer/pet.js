@@ -74,28 +74,29 @@ holder.add(spinner);
    桌宠最容易显得「贴在屏幕上」的原因就是没有影子。
    一张径向渐变的椭圆贴在 y≈0，跳起来时缩小变淡，落地恢复。 */
 function softShadowTexture() {
+  // 用 256px + 七段渐变：段数太少、分辨率太低，在斜视角下会出现一圈圈色带和硬边
   const c = document.createElement('canvas');
-  c.width = c.height = 128;
+  c.width = c.height = 256;
   const g = c.getContext('2d');
-  const grd = g.createRadialGradient(64, 64, 4, 64, 64, 62);
-  grd.addColorStop(0, 'rgba(58,46,50,.34)');
-  grd.addColorStop(0.5, 'rgba(58,46,50,.14)');
-  grd.addColorStop(1, 'rgba(58,46,50,0)');
+  const grd = g.createRadialGradient(128, 128, 8, 128, 128, 124);
+  const stops = [[0, 1], [0.35, 0.82], [0.55, 0.55], [0.7, 0.3], [0.82, 0.13], [0.92, 0.04], [1, 0]];
+  for (const [p, a] of stops) grd.addColorStop(p, 'rgba(52,42,46,' + (a * 0.16).toFixed(3) + ')');
   g.fillStyle = grd;
-  g.fillRect(0, 0, 128, 128);
+  g.fillRect(0, 0, 256, 256);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
 const groundShadow = new THREE.Mesh(
-  new THREE.PlaneGeometry(0.72, 0.72),
+  new THREE.PlaneGeometry(0.92, 0.92),
   new THREE.MeshBasicMaterial({
     map: softShadowTexture(), transparent: true, depthWrite: false, opacity: 0.7
   })
 );
 groundShadow.rotation.x = -Math.PI / 2;
-groundShadow.position.y = 0.004;
+groundShadow.position.y = 0.006;
+groundShadow.position.z = 0.03;
 groundShadow.renderOrder = -1;
 holder.add(groundShadow);
 
@@ -1206,7 +1207,7 @@ function tick() {
       // 平时飘在身侧，别趴在头顶挡脸
       fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
     }
-    fairyGlow.material.opacity = 0.16 + Math.sin(t * 4) * 0.05;
+    fairyGlow.material.opacity = 0.05;
     if (eggRoot) {
       eggBounce = Math.max(0, eggBounce - dt * 1.8);
       eggRoot.position.y = eggBounce * 0.09 + Math.sin(t * 2.3) * 0.012;
@@ -1456,10 +1457,10 @@ function tick() {
     // 打字反应：这个模型手藏在蓬蓬裙后面，抬手只会看着像「指人」，
     // 所以改成跟着敲字节奏轻轻点头 + 身体微颤 —— 反而更像「她在跟着你打字」。
     if (typingHeat > 0.02) {
-      const k = typingHeat;
+      // 基础节奏 + 每次敲击的额外低头，两段叠加才有「一下一下」的实感
       const ph = t * 11;
-      pitchBone(rig, rig.head, Math.sin(ph) * 0.075 * k, 'x');
-      pitchBone(rig, rig.chest, Math.sin(ph + 0.6) * 0.03 * k, 'x');
+      pitchBone(rig, rig.head, (Math.sin(ph) * 0.06 + typeHit * 0.10) * typingHeat, 'x');
+      pitchBone(rig, rig.chest, (Math.sin(ph + 0.6) * 0.03 + typeHit * 0.045) * typingHeat, 'x');
     }
 
     // 扑击：两条胳膊一起往前伸，抓空了再收回来
@@ -1499,6 +1500,13 @@ function tick() {
         sizeMin: 4, sizeMax: 7, lifeMin: 0.5, lifeMax: 0.9
       });
     }
+  }
+
+  // 每次敲击的冲量：身体轻轻一压一弹
+  typeHit *= Math.exp(-dt * 12);
+  if (typeHit > 0.01) {
+    squash *= 1 - typeHit * 0.035;
+    spinner.position.y += typeHit * 0.012;
   }
 
   // 停止打字后 0.4 秒放开
@@ -1608,9 +1616,17 @@ window.pet?.onToggleMusic(() => { toggleMusic(); });
 let typingHeat = 0;
 let typeFxTimer = 0;
 let typingAt = 0;
+let typeHit = 0;                 // 每一次按键的冲击，衰减很快
 window.pet?.onTyping?.((d) => {
-  typingHeat = d && d.stop ? 0 : 1;
   typingAt = performance.now();
+  if (d && d.stop) { typingHeat = 0; return; }
+  typingHeat = 1;
+  typeHit = 1;
+  // 每一下都冒两颗小星，才看得出「她在跟着你敲」
+  sparks.burst({ x: rnd(-0.2, 0.2), y: 0.78, z: 0.24 }, {
+    n: 2, colors: ['#fff2c4', '#ffd9ee', '#cfe4ff'], speed: 0.5, up: 0.7,
+    sizeMin: 5, sizeMax: 9, lifeMin: 0.35, lifeMax: 0.7
+  });
 });
 
 // 视线跟随：鼠标在屏幕哪边，她就微微转头看过去（幅度很小，别像扭脖子）

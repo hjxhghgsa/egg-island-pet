@@ -87,14 +87,16 @@ export function createParticles(THREE, scene, capacity = 640) {
         vec2 q = gl_PointCoord * 2.0 - 1.0;
         float r2 = dot(q, q);
         if (r2 > 1.0) discard;
-        float core = exp(-r2 * 5.2);                          // 亮核
-        float halo = exp(-r2 * 1.5) * 0.42;                   // 柔光
-        float arm = 0.34 + 0.30 * sin(vSeed * 6.283);          // 有的带星芒，有的不带
-        float sx = pow(max(0.0, 1.0 - abs(q.x) * 2.1), 20.0);
-        float sy = pow(max(0.0, 1.0 - abs(q.y) * 2.1), 20.0);
-        float a = (core + halo + (sx + sy) * arm) * vAlpha * uFade;
+        float core = exp(-r2 * 9.0);                          // 亮核收得很紧
+        float halo = exp(-r2 * 2.6) * 0.22;                   // 柔光很淡
+        float arm = 0.30 + 0.28 * sin(vSeed * 6.283);          // 有的带星芒，有的不带
+        float sx = pow(max(0.0, 1.0 - abs(q.x) * 2.1), 22.0);
+        float sy = pow(max(0.0, 1.0 - abs(q.y) * 2.1), 22.0);
+        // pow(1-r2) 强制边缘归零：没有这一步，像素点会显出硬边圆盘的轮廓
+        float fall = pow(max(0.0, 1.0 - r2), 1.7);
+        float a = (core * 1.25 + halo + (sx + sy) * arm) * fall * vAlpha * uFade;
         if (a < 0.004) discard;
-        vec3 c = vColor * (1.0 + core * 0.75) + vec3(core * 0.28);
+        vec3 c = vColor * (1.0 + core * 1.3) + vec3(core * 0.55);
         gl_FragColor = vec4(c, a);
       }
     `

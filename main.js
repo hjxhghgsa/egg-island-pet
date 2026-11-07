@@ -752,6 +752,55 @@ ipcMain.on('drag-move', () => {
   });
 });
 
+let glideTimer = null;
+
+// 平滑滑到目标位置：直接 setBounds 会「瞬移」，看不出是吸过去的
+function glideTo(tx, ty, ms = 200) {
+  stopFling();
+  if (glideTimer) { clearInterval(glideTimer); glideTimer = null; }
+  if (!win || win.isDestroyed()) return;
+  const b = win.getBounds();
+  const sx = b.x, sy = b.y, t0 = Date.now();
+  glideTimer = setInterval(() => {
+    if (!win || win.isDestroyed()) { clearInterval(glideTimer); glideTimer = null; return; }
+    const k = Math.min(1, (Date.now() - t0) / ms);
+    const e = k * k * (3 - 2 * k);                 // smoothstep，起停都软
+    win.setBounds({
+      x: Math.round(sx + (tx - sx) * e),
+      y: Math.round(sy + (ty - sy) * e),
+      width: WIN_W, height: WIN_H
+    });
+    if (k >= 1) {
+      clearInterval(glideTimer);
+      glideTimer = null;
+      writeSettings({ x: tx, y: ty });
+    }
+  }, 16);
+}
+
+// 松手吸边：四条边都吸，70px 内就贴过去（之前只有左右、只有 28px，太难点中）
+function snapToEdge() {
+  if (!win || win.isDestroyed()) return;
+  const b = win.getBounds();
+  const area = screen.getDisplayMatching(b).workArea;
+  const SNAP = 70;
+  const dl = b.x - area.x;
+  const dr = area.x + area.width - (b.x + b.width);
+  const dt2 = b.y - area.y;
+  const db = area.y + area.height - (b.y + b.height);
+  const min = Math.min(dl, dr, dt2, db);
+  let tx = b.x, ty = b.y;
+  if (min <= SNAP) {
+    if (min === dl) tx = area.x;
+    else if (min === dr) tx = area.x + area.width - b.width;
+    else if (min === dt2) ty = area.y;
+    else ty = area.y + area.height - b.height;
+  }
+  if (process.env.PET_DEBUG) console.log('[snap]', JSON.stringify({ from: [b.x, b.y], to: [tx, ty], min: Math.round(min) }));
+  if (tx === b.x && ty === b.y) { writeSettings({ x: b.x, y: b.y }); return; }
+  glideTo(tx, ty);
+}
+
 function stopFling() {
   if (flingTimer) { clearInterval(flingTimer); flingTimer = null; }
 }
@@ -777,8 +826,7 @@ function startFling(sx, sy) {
     vx *= 0.9; vy *= 0.9;
     if (Math.hypot(vx, vy) < 0.6) {
       stopFling();
-      const f = win.getBounds();
-      writeSettings({ x: f.x, y: f.y });
+      snapToEdge();
     }
   }, 16);
 }
@@ -807,16 +855,7 @@ ipcMain.on('drag-end', () => {
     return;
   }
 
-  let b = win.getBounds();
-  // 松手时贴边：离屏幕左右边缘 28px 内就吸过去，别让她半截挂在屏幕外
-  const area = screen.getDisplayMatching(b).workArea;
-  const SNAP = 28;
-  let x = b.x;
-  if (b.x - area.x < SNAP) x = area.x;
-  else if (area.x + area.width - (b.x + b.width) < SNAP) x = area.x + area.width - b.width;
-  if (x !== b.x) win.setBounds({ x, y: b.y, width: WIN_W, height: WIN_H });
-  b = win.getBounds();
-  writeSettings({ x: b.x, y: b.y });
+  snapToEdge();
 });
 
 ipcMain.handle('get-settings', () => readSettings());
