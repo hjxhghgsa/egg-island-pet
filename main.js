@@ -752,9 +752,12 @@ let lastDragPoint = null;
 let dragTrail = [];        // 最近的拖动采样，用来算松手速度
 let dragNearEdge = null;    // 拖动时最近的那条边，用来提前提示
 let flingTimer = null;
+let edgePeekTimer = null;   // 松手后延迟探头的定时器，拖走时必须取消
 
 ipcMain.on('drag-start', () => {
   if (!win) return;
+  clearTimeout(edgePeekTimer);     // 否则拖到一半会收到迟到的 peek，镜头突然切回特写
+  edgePeekTimer = null;
   sendWin('peek', null);
   sendWin('snap-freed', true);
   stopFling();
@@ -854,7 +857,11 @@ function snapToEdge() {
   glideTo(tx, ty);
   // 先演「被吸住 / 挣扎」，再探头
   sendWin('snap-caught', edge);
-  setTimeout(() => sendWin('peek', edge), 700);
+  clearTimeout(edgePeekTimer);
+  edgePeekTimer = setTimeout(() => {
+    edgePeekTimer = null;
+    sendWin('peek', edge);
+  }, 700);
 }
 
 function stopFling() {

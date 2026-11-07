@@ -33,16 +33,29 @@ renderer.toneMappingExposure = 1.02;
 renderer.setClearAlpha(0);
 // 桌面宠物不需要阴影：省一大笔开销
 renderer.shadowMap.enabled = false;
+// 贴边特写：齐着窗口下边界裁掉身体，只留一颗脑袋。
+// 用 Three.js 自带的全局裁剪面，不引任何新依赖；断面正好落在窗口外，看不出来。
+const peekClipPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const NO_CLIP = [], PEEK_CLIP = [peekClipPlane];
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
 
 // 相机按模型高度自适应，人物和宠物都能占满画面约 3/4
+// camBase 保存「正常取景」的基准，探头时从这里插值到头部特写，松手再滑回来
+let camBase = { y: 1.35 * 0.56, z: 1.35 * 2.3, lookY: 1.35 * 0.5, headY: 1.35 * 0.90, clipY: 1.35 * 0.523 };
 function frameCamera(height) {
   // 取景：人物占画面约 3/4，头顶和脚下都留出呼吸空间。
   // 2.0 倍距离时她占 89%，贴着上下边，看着闷；2.3 倍约 76%，最舒服。
-  camera.position.set(0, height * 0.56, height * 2.3);
-  camera.lookAt(0, height * 0.5, 0);
+  // 探头特写：头顶 1.39、下巴 0.82、肩膀 0.8 以下。把镜头中心抬到 0.94h，
+  // 让 clipY 正好压在窗口下边界上 —— 身体被裁掉的断面藏在窗口外，看不见。
+  camBase = {
+    y: height * 0.56, z: height * 2.3, lookY: height * 0.5,
+    headY: height * 0.90, clipY: height * 0.523, pivotY: height * 0.78
+  };
+  camera.position.set(0, camBase.y, camBase.z);
+  camera.lookAt(0, camBase.lookY, 0);
+  camera.zoom = 1;
   camera.updateProjectionMatrix();
 }
 frameCamera(1.35);
@@ -83,16 +96,26 @@ peekingHands.visible = false;
 scene.add(peekingHands);
 
 const handMat = new THREE.MeshStandardMaterial({ color: 0xffd8c2, roughness: 0.72 });
+const fingerGeo = new THREE.CapsuleGeometry(0.013, 0.030, 3, 6);
+const tipGeo = new THREE.CapsuleGeometry(0.012, 0.018, 3, 6);
 for (let i = 0; i < 2; i++) {
   const hand = new THREE.Group();
-  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 10), handMat);
-  palm.scale.set(1, 0.8, 0.72);
+  const palm = new THREE.Mesh(new THREE.SphereGeometry(0.055, 14, 10), handMat);
+  palm.scale.set(1, 0.78, 0.7);
   hand.add(palm);
   for (let f = 0; f < 4; f++) {
-    const finger = new THREE.Mesh(new THREE.CapsuleGeometry(0.010, 0.028, 3, 6), handMat);
-    finger.position.set((f - 1.5) * 0.027, 0.052, 0.01);
-    finger.rotation.z = (f - 1.5) * 0.14;
-    hand.add(finger);
+    // 每根手指两节：先向上伸，再往里扣，像搭在边沿上半扒着
+    const seg = new THREE.Group();
+    seg.position.set((f - 1.5) * 0.028, 0.045, 0.012);
+    seg.rotation.z = (f - 1.5) * 0.12;
+    const lower = new THREE.Mesh(fingerGeo, handMat);
+    lower.position.y = 0.020;
+    seg.add(lower);
+    const tip = new THREE.Mesh(tipGeo, handMat);
+    tip.position.set(0, 0.052, 0.012);
+    tip.rotation.set(0.75, 0, (f - 1.5) * 0.16);   // 指尖往里扣，正面也看得出弯
+    seg.add(tip);
+    hand.add(seg);
   }
   peekingHands.add(hand);
 }
@@ -684,6 +707,9 @@ const ACTS = [
 
 let act = 'idle';
 let actTimer = 7;
+// 贴边探头期间锁住节目轮换：随机切到 sleep / sit 会低头，
+// 脸就被压出头部特写，看起来像「头不见了」。
+let peekingNow = false;
 let lastAct = '';
 let hopTimer = 0;
 let bloomTimer = 0;
@@ -1200,7 +1226,21 @@ window.__pet.peekState = () => JSON.stringify({
   holderX: +holder.position.x.toFixed(3),
   holderY: +holder.position.y.toFixed(3),
   holderRotZ: +holder.rotation.z.toFixed(2),
+  camZoom: +camera.zoom.toFixed(2),
+  camX: +camera.position.x.toFixed(2),
+  camY: +camera.position.y.toFixed(2),
+  hands: peekingHands.visible,
   canvasW: innerWidth
+});
+
+window.__pet.viewInfo = () => JSON.stringify({
+  cam: [camera.position.x, camera.position.y, camera.position.z].map((v) => +v.toFixed(3)),
+  zoom: +camera.zoom.toFixed(2),
+  spinY: +spinner.rotation.y.toFixed(2),
+  spinZ: +spinner.rotation.z.toFixed(2),
+  holderY: +holder.position.y.toFixed(3),
+  clip: +peekClipPlane.constant.toFixed(3),
+  clipping: renderer.clippingPlanes.length
 });
 
 window.__pet.fairyPos = () => [
@@ -1308,8 +1348,9 @@ function tick() {
   /* 节目轮换：不连续重复同一套 */
   actTimer -= dt;
   if (actTimer <= 0) {
-    // 连击时别突然换节目（切到坐下/睡觉会让人以为「点着点着就停了」）
-    if (comboMode) actTimer = 1.0;
+    // 连击时别突然换节目（切到坐下/睡觉会让人以为「点着点着就停了」）；
+    // 贴边探头同理，低头/坐下会把脸顶出特写取景框。
+    if (comboMode || peekingNow) actTimer = 1.0;
     else pickAct();
   }
 
@@ -1513,26 +1554,40 @@ function tick() {
     resistX *= Math.exp(-dt * 10);
   }
 
-  /* 探头 = 整个人横过来挂在屏幕边沿：
-     身体转到 90°，头朝屏幕内侧，窗口里只剩下头和手。
-     竖着往外推只会「露半个身子」，横过来才像扒着边沿往里看。 */
+  /* 探头 = 镜头推近成「头部特写」。
+     透明窗只有 200×200，把整只人往屏幕外推，只会连脑袋一起被窗口边界裁掉，
+     过去十几版都是栽在这。改成 zoom + 把镜头抬到脸的高度：
+     身体落进取景框外自然消失，完整的头留在窗口里贴着屏幕那条边，
+     两只小手抬到额头上方、指尖弯曲半扒着上边框。 */
   const peekDir = peekEdge === 'left' ? -1 : 1;
-  const peekOff = peekDir * 1.28 * peekAmt;   // 1.52 时脑袋也被切掉一半，收到 1.28 让头完整露出来
-  const peekLift = 0.22 * peekAmt;   // 抬太高头会顶到窗口上沿
-  holder.position.x = walkX + peekOff + resistX;
-  holder.position.y = peekLift;   // 必须赋值：+= 会每帧累加，人直接被顶出画面
-  holder.rotation.z = peekDir * 0.42 * peekAmt;   // 歪 24°
+  const pz = peekAmt < 0.002 ? 0 : peekAmt;    // 衰减到 0，正常取景就一帧都不碰相机
+  if (pz > 0 || camera.zoom !== 1) {
+    camera.zoom = 1 + 0.75 * pz;                // 1.75 倍特写：头上下都留安全边距，头顶上方还放得下两只手
+    const camX = -peekDir * 0.08 * pz;          // 镜头往内挪，头贴住屏幕边又不切到发梢
+    const camY = camBase.y + (camBase.headY - camBase.y) * pz;
+    const lookY = camBase.lookY + (camBase.headY - camBase.lookY) * pz;
+    camera.position.set(camX, camY, camBase.z);
+    camera.lookAt(camX, lookY, 0);
+    camera.updateProjectionMatrix();
+  }
 
-  // 小手扒在窗口内侧那条边上
-  handsAmt += ((peekAmt > 0.15 ? 1 : 0) - handsAmt) * Math.min(1, dt * 6);
+  // 歪着的脑袋：整个人绕脚底转会把头甩出画面，所以按真实头中心补回横向位移
+  const tilt = (resistTilt + peekDir * 0.18) * pz;
+  holder.position.x = walkX + resistX - peekDir * 0.04 * pz + Math.sin(tilt) * camBase.pivotY;
+  holder.position.y = 0.03 * pz;                // 必须赋值：+= 会每帧累加把人顶出画面
+  holder.rotation.z = tilt;
+
+  handsAmt += ((pz > 0.15 ? 1 : 0) - handsAmt) * Math.min(1, dt * 6);
   peekingHands.visible = handsAmt > 0.03;
   if (peekingHands.visible) {
-    const hx = (peekEdge === 'left' ? -1 : 1) * 0.56;   // 手在头旁边，别飘到画外
+    // 头被倾斜补偿拉回画面中线，手得跟着「头的实际位置」走，
+    // 直接跟 holder 原点会让靠边那只手被推出窗口。
+    const headX = holder.position.x - Math.sin(tilt) * camBase.pivotY;
     peekingHands.children.forEach((hand, i) => {
-      // 手要贴着她脑袋的高度：她整体被抬了 peekLift，头在 ≈1.15 处
-      const bob = Math.sin(t * 2.2 + i * 1.6) * 0.012;
-      hand.position.set(hx, 1.12 + i * 0.16 + bob, 0.2);
-      hand.rotation.z = (peekEdge === 'left' ? 1 : -1) * (1.15 + bob * 3);   // 手指朝下扣住边沿
+      const bob = Math.sin(t * 2.2 + i * 1.6) * 0.010;
+      hand.position.set(headX + (i ? 0.30 : -0.30),
+        camBase.headY + 0.30 * handsAmt + bob, 0.22);
+      hand.rotation.z = (i ? 0.34 : -0.34) + bob * 2;   // 手腕往内扣
       hand.scale.setScalar(0.85 + handsAmt * 0.15);
     });
   }
@@ -1762,16 +1817,16 @@ function tick() {
   }
   if (kbDirty && t - kbLastDraw > 0.05) { kbLastDraw = t; kbDraw(); }
 
-  // 扒着屏幕边缘：双手抬到头两侧，像抠住边沿；头略低
+  // 扒着屏幕边缘：脑袋歪着往里看。
+  // 不要再抬模型自己的手臂 —— 袖子会伸进取景框里穿帮，扒边的手由 peekingHands 代劳。
   if (peekAmt > 0.05 && rigReady && modelRoot) {
     const pr = modelRoot.userData.islandRig;
     if (pr) {
       const k = peekAmt;
-      for (const arm of pr.arms) {
-        pitchBone(pr, arm.upper, 1.65 * k, 'z');
-        pitchBone(pr, arm.lower, 0.25 * k, 'z');
-      }
-      pitchBone(pr, pr.head, 0.18 * k, 'x');
+      pitchBone(pr, pr.head, 0.12 * k, 'x');
+      // 不要再动 head 的局部 z 轴：这套骨架里它更接近「转头」，
+      // 左右边一换正负号就把整张脸转到后面去了，只剩个后脑勺。
+      // 歪头由 holder.rotation.z 的整体倾斜负责，左右天然对称。
     }
   }
 
@@ -1828,6 +1883,19 @@ function tick() {
     dragTilt *= Math.exp(-dt * 6);
     spinner.rotation.z += (dragTilt - spinner.rotation.z) * Math.min(1, dt * 10);
   }
+
+  // 头部特写时把身边的道具收起来，免得秋千/键盘/小蛋飘在半空穿帮。
+  // 每帧无条件重算，松手回到正常取景后它们自己就回来了。
+  const peekHide = peekAmt < 0.45;
+  fairy.visible = fairyOn && peekHide;
+  for (const s of fairyTrail) s.visible = fairy.visible;
+  swingGroup.visible = act === 'swing' && peekHide;
+  kbGroup.visible = (kbWant > 0 || kbGroup.position.y > 0.04) && peekHide;
+
+  // 裁剪面从画面下方慢慢升上来，不会在贴边瞬间「咔」地切掉半个身子。
+  // 到位后正好压在窗口下边界，断面藏在窗口外。
+  peekClipPlane.constant = 0.5 - (camBase.clipY + 0.5) * pz;
+  renderer.clippingPlanes = pz > 0.02 ? PEEK_CLIP : NO_CLIP;
 
   sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算
   renderer.render(scene, camera);
@@ -1921,9 +1989,14 @@ let peekAmt = 0;
 let peekForceUntil = 0;
 window.pet?.onPeek?.((edge) => {
   peekEdge = edge || null;
+  peekingNow = !!peekEdge;
   // 松手时光标还在她身上（hovering=true）会立刻取消探头，
   // 所以贴边后先强制保持 6 秒，之后再由 hover 决定。
-  if (peekEdge) peekForceUntil = performance.now() + 6000;
+  if (peekEdge) {
+    peekForceUntil = performance.now() + 6000;
+    // 如果正趴着睡 / 坐着，先把她叫起来，否则特写里只有一个后脑勺
+    if (act !== 'idle') enterAct('idle', 12);
+  }
 });
 
 // 被吸住 → 挣扎 → 被拽进去 → 探头；拖出来 → 获救
@@ -1948,6 +2021,10 @@ window.pet?.onSnapCaught?.((edge) => {
 window.pet?.onSnapFreed?.(() => {
   if (!caughtEdge) return;
   caughtEdge = null;
+  // 兜底：不管从哪条路径被拎出来，都把特写镜头收回去，别一直歪着头
+  peekEdge = null;
+  peekingNow = false;
+  peekForceUntil = 0;
   resistX = 0;
   showBubble(pickOne(FREED_LINES), 2400);
   jumpVel = 2.0;
@@ -1970,6 +2047,7 @@ window.pet?.onNearEdge?.((edge) => {
 window.pet?.onUserIdle?.((idle) => {
   if (idle) {
     if (act === 'chase') return;         // 正在扑小蛋就别打断
+    if (peekingNow) return;              // 正扒着屏幕边探头，别让她低头睡过去
     enterAct('sleep', 900);
     showBubble('你去忙，我趴会儿', 3000);
   } else {
