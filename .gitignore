@@ -15,3 +15,11 @@ _test_para.js
 .DS_Store
 _ref/
 _dist*.log
+# 3D 重建工作流的临时产物（原始 28MB GLB / base64 / 生成脚本 / UV 分析图）
+_rebuilt_raw.glb
+_gen3d.py
+_ref_cake_front.*
+_uv_*.png
+# 隔离调试实例的用户数据目录
+_testdata/
+_td*/

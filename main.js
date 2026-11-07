@@ -38,8 +38,11 @@ app.commandLine.appendSwitch('allow-file-access-from-files');
 
 // Windows 上系统通知要有 AppUserModelId 才弹得出来
 app.setAppUserModelId('com.mumu.eggislandpet');
-// 开发跑和打包跑的用户目录统一，歌单/设置才能共用
-app.setPath('userData', path.join(app.getPath('appData'), 'EggIslandPet'));
+// 开发跑和打包跑的用户目录统一，歌单/设置才能共用。
+// 调试时用 PET_TEST_USERDATA 指到别的目录，可绕开单实例锁：
+// 桌面上已经开着的那只不会被顶掉，测试实例也不读写真实的设置/歌单。
+app.setPath('userData',
+  process.env.PET_TEST_USERDATA || path.join(app.getPath('appData'), 'EggIslandPet'));
 
 // 只允许一个实例；重复双击就召唤已有的那只
 const gotLock = app.requestSingleInstanceLock();
@@ -567,6 +570,16 @@ app.whenReady().then(async () => {
       } catch (e) { console.log('[eval err]', e.message); }
       app.isQuitting = true; app.quit();
     }, Number(process.env.PET_EVAL_DELAY || 5000));
+  }
+
+  // 调试：PET_FACE_HOLD=1 把眨眼 / 口型贴片常显，方便截图校准五官位置
+  if (process.env.PET_FACE_HOLD) {
+    setTimeout(() => {
+      if (win && !win.isDestroyed()) {
+        win.webContents.executeJavaScript('window.__pet.faceHold && window.__pet.faceHold(true); "held"')
+          .catch(() => {});
+      }
+    }, Number(process.env.PET_FACE_HOLD_DELAY || 5000));
   }
 
   // 调试：PET_TYPING=1 直接打开键盘钩子，并在 12 秒后报告收到多少次按键
@@ -1811,7 +1824,17 @@ ipcMain.on('pet-notify', (_e, d) => {
 /* 右键菜单 */
 const MODEL_MENU = [
   { key: 'cake', label: '蛋糕纯' },
-  { key: 'jade', label: '珠玉纯' }
+  { key: 'jade', label: '珠玉纯' },
+  { key: 'rebuilt', label: '重建版·蛋糕纯（AI 重建模）' }
+];
+const GESTURE_MENU = [
+  { key: 'heart', label: '比个心' },
+  { key: 'wave',  label: '招招手' },
+  { key: 'count', label: '数数' },
+  { key: 'cheek', label: '托腮' },
+  { key: 'piano', label: '弹琴' },
+  { key: 'open',  label: '摊手' },
+  { key: 'fist',  label: '握拳加油' }
 ];
 const ACT_MENU = [
   { key: 'idle',  label: '站着发呆' },
@@ -1921,6 +1944,19 @@ ipcMain.on('context-menu', () => {
       ]
     },
     { type: 'separator' },
+    {
+      label: '表情与手势',
+      submenu: GESTURE_MENU.map((g) => ({
+        label: g.label, click: () => sendWin('play-gesture', g.key)
+      })).concat([
+        { type: 'separator' },
+        { label: '眨眨眼', click: () => sendWin('face-blink') },
+        {
+          label: '说两句话（看口型）',
+          click: () => { sendWin('face-speak', 4); petSay('你好呀，我照着你的样子重新长了一遍'); }
+        }
+      ])
+    },
     { label: '换个节目 (A)', click: () => sendWin('next-act') },
     {
       label: '待机节目',

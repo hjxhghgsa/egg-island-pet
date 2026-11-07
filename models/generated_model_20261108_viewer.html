@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>重建版·蛋糕纯 — 3D 预览</title>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; background: #f7f3f0; color: #4a3b3b;
+               font-family: -apple-system, "Microsoft YaHei", sans-serif; }
+  .wrap { height: 100%; display: flex; flex-direction: column; align-items: center; }
+  header { padding: 18px 20px 6px; text-align: center; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+  p { margin: 6px 0 0; font-size: 12px; color: #8b7b78; }
+  model-viewer { width: min(92vw, 760px); flex: 1; min-height: 420px;
+                 --poster-color: #f7f3f0; background: transparent; }
+  footer { padding: 8px 20px 16px; font-size: 11px; color: #a1908c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>重建版 · 蛋糕纯</h1>
+    <p>照着桌宠正面渲染图重建的 3D 模型 · 可拖动旋转 / 滚轮缩放</p>
+  </header>
+  <model-viewer src="./character-rebuilt.glb"
+                alt="按蛋糕纯样子重建的 3D 角色"
+                camera-controls auto-rotate auto-rotate-delay="600"
+                rotation-per-second="22deg"
+                shadow-intensity="0" exposure="1.05"
+                camera-orbit="0deg 78deg 105%"
+                min-camera-orbit="auto auto 60%"
+                max-camera-orbit="auto auto 220%"
+                interaction-prompt="none">
+  </model-viewer>
+  <footer>4 万三角面 · PBR 贴图已降采样 · 静态网格（无骨骼绑定）</footer>
+</div>
+</body>
+</html>

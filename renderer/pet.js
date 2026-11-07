@@ -5,6 +5,7 @@ import { createParticles } from './fx3d.js';
 import { easePeek, easeBloom, noise2D, playSfx, setSfxOn, ossState } from './oss.js';
 import { setupCinema, enhanceMaterial, updateCinema, setCinema, cinemaState,
          makeDetailMaps, smoothNormals } from './cinema.js';
+import { createGestureDriver, createFaceLayer, GESTURES, GESTURE_LINES } from './express.js';
 
 // 调试出口：主进程可随时读取
 window.__pet = { stage: 'boot', error: null, rev: THREE.REVISION };
@@ -43,10 +44,26 @@ window.__pet.testFileUrl = async (url) => {
 /* ---------------- 模型清单 ---------------- */
 const MODELS = {
   cake: { file: 'character-cake.glb', height: 1.35, label: '蛋糕纯' },
-  jade: { file: 'character-jade.glb', height: 1.35, label: '珠玉纯' }
+  jade: { file: 'character-jade.glb', height: 1.35, label: '珠玉纯' },
+  // 照着蛋糕纯的正面渲染图重新生成的 3D 模型：0 骨骼、0 动画，
+  // 走「整体表演 + 程序化表情」；走路 / 秋千 / 手势这些骨骼级节目仍由上面两位承担。
+  rebuilt: { file: 'character-rebuilt.glb', height: 1.35, label: '重建版·蛋糕纯', staticMesh: true }
 };
 
 let currentKey = 'cake';
+const isStaticModel = () => !!MODELS[currentKey]?.staticMesh;
+
+/* 表情 / 口型 / 精细手势：不依赖源文件的程序化层。
+   原 GLB 没有 blendshape，但有 42 根手部骨骼；表情用挂在头上的 3D 薄片。 */
+const gestures = createGestureDriver();
+const faceLayer = createFaceLayer();
+window.__pet.playGesture = (g, s) => gestures.play(g, s);
+window.__pet.gestureList = GESTURES;
+window.__pet.speak = (s) => faceLayer.speak(s);
+window.__pet.blink = () => faceLayer.blink();
+window.__pet.calibrateFace = (p) => faceLayer.calibrate(p);
+window.__pet.faceHold = (on) => faceLayer.hold(on);
+window.__pet.expressState = () => ({ gestures: gestures.state(), face: faceLayer.state() });
 
 /* ---------------- 渲染器 ---------------- */
 const canvas = document.getElementById('stage');
@@ -604,7 +621,9 @@ function eggTap() {
 }
 
 window.pet?.onPetSay?.((d) => {
-  showBubble(String((d && d.text) || ''), 4600);
+  const text = String((d && d.text) || '');
+  showBubble(text, 4600);
+  faceLayer.speak(Math.min(6, Math.max(1.2, text.length * 0.22)));   // 说话时嘴跟着动
   popBits('star', 3);
   eggBounce = 1;
 });
@@ -722,6 +741,7 @@ function softenHands(rig, waving, t) {
 let t = 0;
 let rigReady = false;
 let modelRoot = null;
+let gestureTimer = 9;   // 第一个手势别太早，先让她安稳站一会儿
 
 let baseY = 0;           // 模型底部基准
 let jumpVel = 0;         // 跳跃速度
@@ -787,6 +807,8 @@ function enterAct(name, seconds) {
   // 新表演节目配一句短台词，别默默做完动作（性格：直白、少感叹号）
   const PERF_LINES = { stretch: '嗯——伸个懒腰', hum: '哼两句', lean: '看什么呀', bow: '请多指教' };
   if (PERF_LINES[name]) showBubble(PERF_LINES[name], 2200);
+  if (name === 'hum') faceLayer.speak(seconds);        // 哼歌时口型跟着节奏
+  else if (name !== 'sleep') faceLayer.stopSpeak();
   if (name !== 'swing') holder.rotation.z = 0;
 
   // 转完一圈自动对齐回正面
@@ -969,6 +991,14 @@ async function loadModel(modelKey, { announce = true } = {}) {
   // 复用蛋岛原站的程序化骨骼系统
   setupCharacterRig(holderLike);
   const rig = holderLike.userData.islandRig;
+  // 换角色时重新登记手指骨、重新探测脸部位置（新模型也能自动长出表情）
+  gestures.bind(rig, (bone, a, axis) => pitchBone(rig, bone, a, axis));
+  faceLayer.bind(THREE, holderLike, rig);
+  // AI 重建模型是无骨骼静态网格，头部比例和原角色差一截，实测贴片会落到脸颊上。
+  // 与其给出一张歪脸，不如让它保持干净；表情/口型/手势完整留给有骨骼的两位。
+  // 想给重建模型也开，用 __pet.faceHold / __pet.calibrateFace 自行校准即可。
+  faceLayer.setEnabled(!info.staticMesh);
+  window.__pet.faceReady = faceLayer.state().ready;
   if (rig?.hips) {
     holderLike.updateWorldMatrix(true, true);
     const hip = holderLike.worldToLocal(rig.hips.getWorldPosition(new THREE.Vector3()));
@@ -1296,6 +1326,7 @@ function tap() {
   tapTimer = setTimeout(() => { tapCount = 0; comboMode = false; }, COMBO_IDLE);
 
   const combo = tapCount;
+  if (combo === 1) faceLayer.blink();      // 单点她一下，会眨眨眼看你
   // jsfxr 程序化音效：连击越高音越亮；走独立 AudioContext，绝不碰音乐那条链
   playSfx(combo >= 10 ? 'combo' : 'tap', { rate: 1 + Math.min(combo, 24) * 0.018, vol: 0.9 });
   // 连击到 10 以后每一下都撒花会堆满 DOM、明显掉帧，改成只在整十档爆发
@@ -1497,6 +1528,20 @@ function tick() {
   prev = now;
   dt = Math.min(dt, 0.05);
   t += dt;
+  faceLayer.update(t, dt);       // 眨眼 / 说话口型，独立于骨骼动画
+
+  /* 手势不占节目单：隔一阵自己来一个，贴边探头和连击时不打扰 */
+  gestureTimer -= dt;
+  if (gestureTimer <= 0) {
+    gestureTimer = 13 + Math.random() * 12;
+    if (!peekingNow && !comboMode && act !== 'sleep' && !isStaticModel()) {
+      const g = GESTURES[(Math.random() * GESTURES.length) | 0];
+      if (gestures.play(g, 3.0)) {
+        showBubble(GESTURE_LINES[g], 2200);
+        faceLayer.blink();
+      }
+    }
+  }
 
   /* 节目轮换：不连续重复同一套 */
   actTimer -= dt;
@@ -1896,6 +1941,17 @@ function tick() {
 
     softenHands(rig, act === 'wave', t);
     applyPerformance(rig);        // 表演型节目：呼吸 / 重心 / 末端延迟
+    gestures.update(t, dt);       // 精细手势叠加在骨骼动画之后
+
+    // AI 重建模型没有骨骼：用整体变换演呼吸 / 点头 / 摇摆，
+    // 不依赖任何 rig，也完全不碰上面两位有骨骼角色的动画。
+    if (isStaticModel()) {
+      const br = Math.sin(t * 1.75) * 0.012;
+      spinner.scale.y = squash * (1 + br);
+      const sway = (act === 'hum' || act === 'wave')
+        ? Math.sin(t * 3.1) * 0.055 : Math.sin(t * 0.9) * 0.022;
+      spinner.rotation.z += (sway - spinner.rotation.z) * Math.min(1, dt * 3);
+    }
 
     // 跑起来要「颠」：只迈腿不上下起伏，看着就是在滑
     if (act === 'chase') {
@@ -2141,6 +2197,12 @@ window.pet?.onApplySettings((s) => {
   if (typeof s.cinemaOn === 'boolean') setCinema(s.cinemaOn);
 });
 window.pet?.onSfxToggle?.((on) => setSfxOn(on));
+// 右键「表情与手势」：主动点的，不走随机节奏
+window.pet?.onPlayGesture?.((k) => {
+  if (gestures.play(k, 3.4)) showBubble(GESTURE_LINES[k] || '看我手势', 2200);
+});
+window.pet?.onFaceBlink?.(() => faceLayer.blink());
+window.pet?.onFaceSpeak?.((s) => faceLayer.speak(Number(s) || 3));
 window.pet?.onCinemaToggle?.((on) => setCinema(on));
 
 window.pet?.onSwitchModel((k) => {

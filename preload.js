@@ -41,6 +41,10 @@ contextBridge.exposeInMainWorld('pet', {
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
   onSfxToggle: (cb) => ipcRenderer.on('sfx-toggle', (_e, on) => cb(on)),
   onCinemaToggle: (cb) => ipcRenderer.on('cinema-toggle', (_e, on) => cb(on)),
+  // 表情与手势（右键菜单 -> 渲染层）
+  onPlayGesture: (cb) => ipcRenderer.on('play-gesture', (_e, k) => cb(k)),
+  onFaceBlink: (cb) => ipcRenderer.on('face-blink', () => cb()),
+  onFaceSpeak: (cb) => ipcRenderer.on('face-speak', (_e, s) => cb(s)),
   importModel: () => ipcRenderer.invoke('import-model'),
   onModelImported: (cb) => ipcRenderer.on('model-imported', (_e, d) => cb(d)),
   onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k)),
