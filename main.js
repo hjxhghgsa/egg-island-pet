@@ -505,6 +505,7 @@ app.whenReady().then(async () => {
         win.setBounds({ x, y: b.y, width: WIN_W, height: WIN_H });
         sendWin('near-edge', process.env.PET_EDGE);
         sendWin('snap-caught', process.env.PET_EDGE);
+        sendWin('near-edge', null);
         setTimeout(() => sendWin('peek', process.env.PET_EDGE), 700);
         if (process.env.PET_FREED) setTimeout(() => sendWin('snap-freed', true), 4000);
         console.log('[edge-test]', process.env.PET_EDGE, x);
@@ -856,6 +857,7 @@ function snapToEdge() {
   if (tx === b.x && ty === b.y) { writeSettings({ x: b.x, y: b.y }); return; }
   glideTo(tx, ty);
   // 先演「被吸住 / 挣扎」，再探头
+  sendWin('near-edge', null);      // 已经贴上了，拖动提示条退场，别让它残留成一条「框」
   sendWin('snap-caught', edge);
   clearTimeout(edgePeekTimer);
   edgePeekTimer = setTimeout(() => {

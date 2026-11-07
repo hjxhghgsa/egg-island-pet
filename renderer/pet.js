@@ -20,7 +20,6 @@ let currentKey = 'cake';
 
 /* ---------------- 渲染器 ---------------- */
 const canvas = document.getElementById('stage');
-const peekFrameEl = document.getElementById('peekFrame');   // 屏幕边上的门框沿
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: true,
@@ -1599,7 +1598,7 @@ function tick() {
   // zoom 恒为 1，头是原始大小；只靠「镜头平移 + 裁剪面」把身体藏到门框后。
   // pz 归零后还要再跑一帧把镜头送回原位，所以守卫看的是相机高度而不是 zoom。
   if (pz > 0 || Math.abs(camera.position.y - camBase.y) > 0.001) {
-    const camX = -peekDir * 0.50 * pz;          // 视野没被压缩，要挪 0.5 才能让头贴住屏幕边
+    const camX = -peekDir * 0.56 * pz;          // 直接贴住屏幕物理边；不画任何框，那条黑边本身当门框
     const camY = camBase.y + (camBase.headY - camBase.y) * pz;
     const lookY = camBase.lookY + (camBase.headY - camBase.lookY) * pz;
     camera.position.set(camX, camY, camBase.z);
@@ -1620,9 +1619,9 @@ function tick() {
     const headX = holder.position.x - Math.sin(tilt) * camBase.pivotY;
     peekingHands.children.forEach((hand, i) => {
       const bob = Math.sin(t * 2.2 + i * 1.6) * 0.010;
-      // i=0 那只搭在靠屏幕边的门框上，另一只扶在头内侧；左右自动镜像
-      const hx = headX + (i ? -peekDir * 0.24 : peekDir * 0.30);
-      // 从头的高度慢慢抬到框沿，像撑着门框把脑袋探出来
+      // i=0 那只搭在屏幕最外侧那条边上，另一只扶在头内侧；左右自动镜像
+      const hx = headX + (i ? -peekDir * 0.24 : peekDir * 0.20);
+      // 从头的高度慢慢抬到屏幕边沿，像撑着边把脑袋探出来
       const hy = camBase.handY - 0.18 * (1 - handsAmt) + bob;
       hand.position.set(hx, hy, 0.22);
       hand.rotation.z = (i ? 0.34 : -0.34) + bob * 2;   // 手腕往内扣
@@ -1929,12 +1928,6 @@ function tick() {
   for (const s of fairyTrail) s.visible = fairy.visible;
   swingGroup.visible = act === 'swing' && peekHide;
   kbGroup.visible = (kbWant > 0 || kbGroup.position.y > 0.04) && peekHide;
-
-  // 屏幕边上的门框沿：有这条边才读得出「从框后探出头」
-  if (peekFrameEl) {
-    const frameCls = pz > 0.25 ? 'on ' + (peekEdge || '') : '';
-    if (peekFrameEl.className !== frameCls) peekFrameEl.className = frameCls;
-  }
 
   // 裁剪面从画面下方慢慢升上来，不会在贴边瞬间「咔」地切掉半个身子。
   // 到位后正好压在窗口下边界，断面藏在窗口外。
