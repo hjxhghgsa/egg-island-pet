@@ -33,7 +33,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.ico"
@@ -41,5 +43,8 @@
     "portable": {
       "artifactName": "EggIslandPet.exe"
     }
+  },
+  "dependencies": {
+    "msedge-tts": "^2.1.1"
   }
 }

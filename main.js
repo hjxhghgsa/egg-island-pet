@@ -238,6 +238,16 @@ app.whenReady().then(async () => {
       } catch (e) { console.error('[music-test fail]', e.message); }
     }, 5000);
   }
+  if (process.env.PET_TTS) {
+    setTimeout(async () => {
+      try {
+        const r = await win.webContents.executeJavaScript(
+          `window.pet.tts('测试一下新声音，我是蛋糕纯').then(u => 'dataurl_len=' + u.length).catch(e => 'ERR ' + e.message)`
+        );
+        console.log('[tts-test]', r);
+      } catch (e) { console.error('[tts-test fail]', e.message); }
+    }, 7000);
+  }
   if (process.env.PET_SNIP) {
     setTimeout(async () => {
       try {
@@ -444,6 +454,36 @@ ipcMain.handle('list-music', () => {
 ipcMain.on('open-music-folder', () => {
   ensureMusicDir();
   shell.openPath(musicDir());
+});
+
+// 语音合成：走 Edge 的神经语音，比系统 SAPI 自然得多
+let edgeTTS = null;
+function getEdgeTTS() {
+  if (!edgeTTS) {
+    const m = require('msedge-tts');
+    edgeTTS = m;
+  }
+  return edgeTTS;
+}
+
+ipcMain.handle('tts', async (_e, text) => {
+  const { MsEdgeTTS, OUTPUT_FORMAT } = getEdgeTTS();
+  const s = readSettings();
+  const voiceName = s.ttsVoice || 'zh-CN-XiaoxiaoNeural';
+  const rate = Number.isFinite(s.ttsRate) ? s.ttsRate : 8;
+
+  const tts = new MsEdgeTTS();
+  try {
+    await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    const { audioStream } = tts.toStream(text, { rate: rate });
+    const chunks = [];
+    for await (const c of audioStream) chunks.push(Buffer.from(c));
+    const buf = Buffer.concat(chunks);
+    if (!buf.length) throw new Error('合成结果为空');
+    return 'data:audio/mpeg;base64,' + buf.toString('base64');
+  } finally {
+    try { tts.close(); } catch {}
+  }
 });
 
 // 框选截图：先抓全屏，再开一层全屏选择器，选完裁剪

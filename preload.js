@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('pet', {
   snipScreen: () => ipcRenderer.invoke('snip-screen'),
   snipDone: (rect) => ipcRenderer.send('snip-done', rect),
   listMusic: () => ipcRenderer.invoke('list-music'),
+  tts: (text) => ipcRenderer.invoke('tts', text),
   noMusic: () => ipcRenderer.send('no-music'),
   onToggleMusic: (cb) => ipcRenderer.on('toggle-music', () => cb()),
   onNextTrack: (cb) => ipcRenderer.on('next-track', () => cb()),

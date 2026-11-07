@@ -28,23 +28,44 @@ function tip(text) {
 }
 
 /* ---------------- 朗读 ---------------- */
-function speak(text) {
-  if (!voiceOn || !window.speechSynthesis) return;
+const ttsPlayer = new Audio();
+let ttsSeq = 0;
+
+function speakFallback(text) {
+  if (!window.speechSynthesis) return;
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'zh-CN';
   u.rate = 1.06;
-  u.pitch = 1.18;
   const zh = (speechSynthesis.getVoices() || []).find((v) => /zh|Chinese/i.test(v.lang + v.name));
   if (zh) u.voice = zh;
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
 }
+
+async function speak(text) {
+  if (!voiceOn) return;
+  const my = ++ttsSeq;
+  try {
+    ttsPlayer.pause();
+    const url = await window.pet.tts(text);
+    if (my !== ttsSeq) return;   // 期间又说了新的一句，丢掉旧的
+    ttsPlayer.src = url;
+    await ttsPlayer.play();
+  } catch {
+    if (my === ttsSeq) speakFallback(text);
+  }
+}
+
 $('voice').classList.toggle('on', voiceOn);
 $('voice').onclick = () => {
   voiceOn = !voiceOn;
   localStorage.setItem('eggpet_voice', voiceOn ? '1' : '0');
   $('voice').classList.toggle('on', voiceOn);
-  if (!voiceOn) speechSynthesis.cancel();
+  if (!voiceOn) {
+    ttsSeq++;
+    ttsPlayer.pause();
+    if (window.speechSynthesis) speechSynthesis.cancel();
+  }
 };
 
 /* ---------------- 发送 ---------------- */
@@ -190,6 +211,7 @@ async function loadCfg() {
   $('cfgModel').value = c.apiModel || 'deepseek-flash';
   $('cfgKey').value = c.apiKey || '';
   $('cfgVision').value = c.apiVision || '';
+  $('cfgVoice').value = c.ttsVoice || 'zh-CN-XiaoxiaoNeural';
 }
 $('gear').onclick = async () => { await loadCfg(); $('setup').classList.add('show'); };
 $('cfgCancel').onclick = () => $('setup').classList.remove('show');
@@ -198,10 +220,11 @@ $('cfgSave').onclick = () => {
     apiUrl: $('cfgUrl').value.trim() || 'https://api.deepseek.com/v1',
     apiModel: $('cfgModel').value.trim() || 'deepseek-flash',
     apiKey: $('cfgKey').value.trim(),
-    apiVision: $('cfgVision').value.trim() || $('cfgModel').value.trim()
+    apiVision: $('cfgVision').value.trim() || $('cfgModel').value.trim(),
+    ttsVoice: $('cfgVoice').value
   });
   $('setup').classList.remove('show');
-  tip('接口已保存');
+  tip('已保存，点 🔊 试试新声音');
 };
 
 /* ---------------- 启动 ---------------- */

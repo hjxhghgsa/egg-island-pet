@@ -151,6 +151,10 @@
     padding: 7px 9px; font: inherit; outline: none; background: #fff; color: #262626;
   }
   #setup input:focus { border-color: #9ec2f0; }
+  #setup select {
+    width: 100%; border: 1px solid #e2e2e2; border-radius: 8px;
+    padding: 7px 9px; font: inherit; outline: none; background: #fff; color: #262626;
+  }
   #setup .row { display: flex; gap: 7px; margin-top: 9px; }
   #setup button { flex: 1; border: none; border-radius: 8px; padding: 9px; cursor: pointer; font: inherit; }
   #setup .ok { background: #2f7cf6; color: #fff; font-weight: 600; }
@@ -206,6 +210,15 @@
     <input id="cfgKey" type="password" placeholder="sk-...">
     <label>看图用的模型（可留空）</label>
     <input id="cfgVision" placeholder="deepseek-flash">
+    <label>她的声音</label>
+    <select id="cfgVoice">
+      <option value="zh-CN-XiaoxiaoNeural">晓晓 · 温柔自然（推荐）</option>
+      <option value="zh-CN-XiaoyiNeural">晓伊 · 偏甜</option>
+      <option value="zh-CN-XiaochenNeural">晓辰 · 知性</option>
+      <option value="zh-CN-XiaohanNeural">晓涵 · 沉稳</option>
+      <option value="zh-CN-YunxiNeural">云希 · 男声</option>
+      <option value="zh-CN-liaoning-XiaobeiNeural">小北 · 东北话</option>
+    </select>
     <div class="hint">DeepSeek 的 deepseek-flash 支持图片输入，看屏幕和圈选都用它就行。</div>
     <div class="row">
       <button class="cancel" id="cfgCancel">取消</button>
