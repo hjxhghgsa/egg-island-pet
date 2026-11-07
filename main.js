@@ -671,6 +671,12 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => { if (!win) createWindow(); });
   startCare();          // 小蛋的陪伴 / 护眼 / 喝水 / 久坐提醒
+
+  // 陪伴时长：只在她露脸（可见）的时候累加，藏起来不算陪
+  const companionTick = setInterval(() => {
+    if (win && !win.isDestroyed() && win.isVisible()) bumpCompanion(1);
+  }, 60000);
+  if (companionTick.unref) companionTick.unref();
 });
 
 app.on('window-all-closed', () => {
@@ -1330,11 +1336,42 @@ function startCare() {
   }, 30000);
 }
 
+/* ---------------- 陪伴统计 ----------------
+   同类桌宠（DeskPet / Toty）都有「今天陪了你多久」。
+   只记两个数：今天累计陪伴分钟、今天完成了几次专注。按天归零。 */
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+
+function bumpCompanion(minutes) {
+  const s = readSettings();
+  const day = todayKey();
+  const cur = s.statDay === day ? s.statMin || 0 : 0;
+  writeSettings({ statDay: day, statMin: cur + minutes });
+}
+
+function bumpPomodoro() {
+  const s = readSettings();
+  const day = todayKey();
+  const cur = s.statDay === day ? s.pomoCount || 0 : 0;
+  writeSettings({ statDay: day, pomoCount: cur + 1 });
+}
+
+function companionLine() {
+  const s = readSettings();
+  const day = todayKey();
+  const min = s.statDay === day ? s.statMin || 0 : 0;
+  const pomo = s.statDay === day ? s.pomoCount || 0 : 0;
+  if (min < 1) return '刚来，还没算上时间呢';
+  const h = Math.floor(min / 60), m = min % 60;
+  const span = h ? `${h} 小时 ${m} 分` : `${m} 分钟`;
+  return pomo ? `今天陪你 ${span}，一起专注了 ${pomo} 次` : `今天陪你 ${span}`;
+}
+
 function startPomodoro() {
   stopPomodoro();
   petSay('一起专注 25 分钟');
   pomoTimer = setTimeout(() => {
     pomoTimer = null;
+    bumpPomodoro();
     petSay('25 分钟到啦，走走吧');
     if (win && !win.isDestroyed()) win.webContents.send('pet-celebrate', 8);
     pomoBreakTimer = setTimeout(() => {
@@ -1456,6 +1493,7 @@ ipcMain.on('context-menu', () => {
       }))
     },
     { label: '小蛋 开 / 关 (F)', click: () => sendWin('toggle-fairy') },
+    { label: '今天陪你多久', click: () => petSay(companionLine()) },
     { type: 'separator' },
     {
       label: '换个角色',
