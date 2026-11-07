@@ -23,3 +23,7 @@ _uv_*.png
 # 隔离调试实例的用户数据目录
 _testdata/
 _td*/
+# Python 生成期工具缓存 / 骨架调参时的临时 GLB
+__pycache__/
+*.pyc
+_try_*.glb

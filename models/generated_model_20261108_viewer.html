@@ -23,7 +23,7 @@
     <h1>重建版 · 蛋糕纯</h1>
     <p>照着桌宠正面渲染图重建的 3D 模型 · 可拖动旋转 / 滚轮缩放</p>
   </header>
-  <model-viewer src="./character-rebuilt.glb"
+  <model-viewer src="./character-rebuilt-rigged.glb"
                 alt="按蛋糕纯样子重建的 3D 角色"
                 camera-controls auto-rotate auto-rotate-delay="600"
                 rotation-per-second="22deg"
@@ -33,7 +33,7 @@
                 max-camera-orbit="auto auto 220%"
                 interaction-prompt="none">
   </model-viewer>
-  <footer>4 万三角面 · PBR 贴图已降采样 · 静态网格（无骨骼绑定）</footer>
+  <footer>4 万三角面 · PBR 贴图已降采样 · 47 根骨骼 + 蒙皮权重 · 与蛋糕纯同一坐标系（tools/rig_transfer.py 迁移）</footer>
 </div>
 </body>
 </html>

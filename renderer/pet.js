@@ -45,13 +45,16 @@ window.__pet.testFileUrl = async (url) => {
 const MODELS = {
   cake: { file: 'character-cake.glb', height: 1.35, label: '蛋糕纯' },
   jade: { file: 'character-jade.glb', height: 1.35, label: '珠玉纯' },
-  // 照着蛋糕纯的正面渲染图重新生成的 3D 模型：0 骨骼、0 动画，
-  // 走「整体表演 + 程序化表情」；走路 / 秋千 / 手势这些骨骼级节目仍由上面两位承担。
-  rebuilt: { file: 'character-rebuilt.glb', height: 1.35, label: '重建版·蛋糕纯', staticMesh: true }
+  // 照着蛋糕纯重建的 3D 模型：已用 tools/rig_transfer.py 迁移 47 根骨骼 + 蒙皮权重，
+  // 连 node_0 / Armature 父链一起搬，网格 / 骨骼 / 权重三者与蛋糕纯同一坐标系，
+  // 走路 / 秋千 / 贴边探头 / 15 套节目 / 手势全部和原角色同一套 rig 跑。
+  // faceOff 只因为脸部比例不同、不叠表情贴片；静态原件 character-rebuilt.glb 留作对照。
+  rebuilt: { file: 'character-rebuilt-rigged.glb', height: 1.35, label: '重建版·蛋糕纯', faceOff: true }
 };
 
 let currentKey = 'cake';
-const isStaticModel = () => !!MODELS[currentKey]?.staticMesh;
+// 按 rig 里实际找到的骨骼数判断，热导入的静态 GLB 也能自动走简化表演
+const isStaticModel = () => !(modelRoot?.userData?.islandRig?.bones?.length);
 
 /* 表情 / 口型 / 精细手势：不依赖源文件的程序化层。
    原 GLB 没有 blendshape，但有 42 根手部骨骼；表情用挂在头上的 3D 薄片。 */
@@ -64,6 +67,15 @@ window.__pet.blink = () => faceLayer.blink();
 window.__pet.calibrateFace = (p) => faceLayer.calibrate(p);
 window.__pet.faceHold = (on) => faceLayer.hold(on);
 window.__pet.expressState = () => ({ gestures: gestures.state(), face: faceLayer.state() });
+// 骨架自检：带 skin 的 GLB 加载后应能看到 47 根骨骼、四肢齐全、SkinnedMesh 存在
+// 注意别叫 rigInfo —— 下面那处旧的 rigInfo 是给动画调参用的，会覆盖同名接口
+window.__pet.skeletonInfo = () => {
+  const r = modelRoot?.userData?.islandRig;
+  let skinned = 0;
+  modelRoot?.traverse((o) => { if (o.isSkinnedMesh) skinned++; });
+  return { bones: r?.bones?.length || 0, arms: r?.arms?.length || 0,
+           legs: r?.legs?.length || 0, head: !!r?.head, hips: !!r?.hips, skinned };
+};
 
 /* ---------------- 渲染器 ---------------- */
 const canvas = document.getElementById('stage');
@@ -994,10 +1006,11 @@ async function loadModel(modelKey, { announce = true } = {}) {
   // 换角色时重新登记手指骨、重新探测脸部位置（新模型也能自动长出表情）
   gestures.bind(rig, (bone, a, axis) => pitchBone(rig, bone, a, axis));
   faceLayer.bind(THREE, holderLike, rig);
-  // AI 重建模型是无骨骼静态网格，头部比例和原角色差一截，实测贴片会落到脸颊上。
-  // 与其给出一张歪脸，不如让它保持干净；表情/口型/手势完整留给有骨骼的两位。
-  // 想给重建模型也开，用 __pet.faceHold / __pet.calibrateFace 自行校准即可。
-  faceLayer.setEnabled(!info.staticMesh);
+  // 重建版已经有真骨架，但脸是 AI 图生 3D 重画过的，五官比例和原角色差一截，
+  // 实测贴片会落到脸颊上。与其给出一张歪脸，不如让它保持干净；
+  // 表情 / 口型 / 精细手势完整留给蛋糕纯 / 珠玉纯两位。
+  // 想给重建版也开，用 __pet.faceHold / __pet.calibrateFace 自行校准即可。
+  faceLayer.setEnabled(!info.faceOff);
   window.__pet.faceReady = faceLayer.state().ready;
   if (rig?.hips) {
     holderLike.updateWorldMatrix(true, true);

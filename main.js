@@ -582,6 +582,12 @@ app.whenReady().then(async () => {
     }, Number(process.env.PET_FACE_HOLD_DELAY || 5000));
   }
 
+  // 调试：PET_GESTURE=wave 在指定时刻演一个手势，用来截图验收骨骼绑定
+  if (process.env.PET_GESTURE) {
+    setTimeout(() => { sendWin('play-gesture', process.env.PET_GESTURE); },
+      Number(process.env.PET_GESTURE_DELAY || 6000));
+  }
+
   // 调试：PET_TYPING=1 直接打开键盘钩子，并在 12 秒后报告收到多少次按键
   if (process.env.PET_TYPING) {
     setTimeout(() => {
