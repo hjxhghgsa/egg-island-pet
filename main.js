@@ -110,7 +110,6 @@ function showPet({ focus = false } = {}) {
 }
 
 function hidePet() {
-  patrolStop();
   if (!win || win.isDestroyed() || !win.isVisible()) return;
   win.webContents.send('pet-pause');
   win.hide();
@@ -218,12 +217,23 @@ function createWindow() {
   }, 60000);
   if (topGuard.unref) topGuard.unref();
 
+  // 渲染进程 OOM / GPU 崩掉时自己重载，不然就是一个透明的空窗口
+  win.webContents.on('render-process-gone', (_e, d) => {
+    console.log('[renderer gone]', d && d.reason);
+    if (win && !win.isDestroyed() && d && d.reason !== 'clean-exit') {
+      setTimeout(() => { if (win && !win.isDestroyed()) win.reload(); }, 800);
+    }
+  });
+
   // 调试：PET_DEBUG=1 把渲染进程的 console（含 shader 编译错误）打到主进程 stdout
   if (process.env.PET_DEBUG) {
     win.webContents.on('console-message', (_e, lvl, msg) => console.log('[wc]', msg));
   }
 
-  win.on('closed', () => { win = null; });
+  win.on('closed', () => {
+    clearInterval(topGuard);        // 不清理的话，窗口每重建一次就多一个 60s 定时器
+    win = null;
+  });
 }
 
 function summon() {
@@ -658,7 +668,6 @@ ipcMain.on('hover-state', (_e, hovering) => {
 let lastDragPoint = null;
 ipcMain.on('drag-start', () => {
   if (!win) return;
-  patrolStop();                     // 手动拖她的时候别再自己跑
   const cursor = screen.getCursorScreenPoint();
   const b = win.getBounds();
   dragOrigin = { dx: cursor.x - b.x, dy: cursor.y - b.y };
@@ -683,12 +692,29 @@ ipcMain.on('drag-move', () => {
 ipcMain.on('drag-end', () => {
   if (!win || !dragOrigin) return;
   dragOrigin = null;
-  const b = win.getBounds();
+  let b = win.getBounds();
+  // 松手时贴边：离屏幕左右边缘 28px 内就吸过去，别让她半截挂在屏幕外
+  const area = screen.getDisplayMatching(b).workArea;
+  const SNAP = 28;
+  let x = b.x;
+  if (b.x - area.x < SNAP) x = area.x;
+  else if (area.x + area.width - (b.x + b.width) < SNAP) x = area.x + area.width - b.width;
+  if (x !== b.x) win.setBounds({ x, y: b.y, width: WIN_W, height: WIN_H });
+  b = win.getBounds();
   writeSettings({ x: b.x, y: b.y });
 });
 
 ipcMain.handle('get-settings', () => readSettings());
-ipcMain.on('save-settings', (_e, patch) => writeSettings(patch));
+ipcMain.on('save-settings', (_e, patch) => {
+  writeSettings(patch);
+  // 只写盘不广播的话，改角色/画质要重启才生效（之前就是这么个坑）
+  const s = readSettings();
+  sendWin('apply-settings', {
+    quality: s.quality || 'balanced',
+    scale: s.scale || 1,
+    model: s.model || 'cake'
+  });
+});
 
 /* ---------- 聊天窗口 ---------- */
 let chatWin = null;
@@ -1081,8 +1107,11 @@ ipcMain.on('asr-chunk', (_e, buf) => {
     // 复制一层：Electron 传过来的是 external buffer，addon 只收普通 JS Float32Array
     const samples = new Float32Array(incoming.length);
     samples.set(incoming);
-    asrBufs.push(samples);
-    asrSamples += samples.length;
+    // 一直不松手时缓冲会无限涨（16k×4B ≈ 64KB/s），封顶 30 秒
+    if (asrSamples < 16000 * 30) {
+      asrBufs.push(samples);
+      asrSamples += samples.length;
+    }
 
     const now = Date.now();
     if (asrBusy || asrSamples < 16000 * 0.6) return;
@@ -1269,45 +1298,19 @@ const sendWin = (ch, ...args) => {
 // 按住说话期间把音乐掐掉：外放的歌会被麦克风原样录进去，识别成「放歌」指令
 ipcMain.on('voice-duck', (_e, on) => sendWin('voice-duck', !!on));
 
-/* ---------------- 追小精灵：窗口带着她满屏跑 ----------------
-   200×200 的窗口里横移最多几十像素，看着就是原地晃。要「整屏跑」只有一条路：
-   让窗口自己在屏幕上巡逻，角色在窗口内保持居中。 */
-let patrolTimer = null;
-let patrolHomeX = null;
-let patrolX = 0;
-let patrolDir = 1;
 
-function patrolStop() {
-  if (!patrolTimer) return;
-  clearInterval(patrolTimer);
-  patrolTimer = null;
-  if (patrolHomeX != null && win && !win.isDestroyed()) {
-    win.setBounds({ x: Math.round(patrolHomeX), y: win.getBounds().y, width: WIN_W, height: WIN_H });
-  }
-  patrolHomeX = null;
-  sendWin('patrol-dir', 0);
-}
-
-function patrolStart() {
-  if (patrolTimer || !win || win.isDestroyed()) return;
-  const b = win.getBounds();
-  const area = screen.getDisplayMatching(b).workArea;
-  patrolHomeX = b.x;
-  patrolX = b.x;
-  patrolDir = 1;
-  patrolTimer = setInterval(() => {
-    if (!win || win.isDestroyed() || !win.isVisible()) { patrolStop(); return; }
-    const maxX = area.x + area.width - WIN_W;
-    patrolX += patrolDir * 4.4;                       // 30fps × 4.4px ≈ 130px/s，和步频对得上才不打滑
-    if (patrolX >= maxX) { patrolX = maxX; patrolDir = -1; }
-    if (patrolX <= area.x) { patrolX = area.x; patrolDir = 1; }
-    if (process.env.PET_DEBUG && Math.round(patrolX) % 240 < 7) console.log('[patrol]', Math.round(patrolX));
-    win.setBounds({ x: Math.round(patrolX), y: b.y, width: WIN_W, height: WIN_H });
-    sendWin('patrol-dir', patrolDir);
-  }, 33);
-}
-
-ipcMain.on('patrol', (_e, on) => { on ? patrolStart() : patrolStop(); });
+// 视线跟随：把她窗口里的相对鼠标位置发过去，渲染层让头微微转过来。
+// 120ms 一次足够了 —— 每帧发就是白白吵醒渲染层。
+setInterval(() => {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  try {
+    const p = screen.getCursorScreenPoint();
+    const b = win.getBounds();
+    const dx = (p.x - (b.x + b.width / 2)) / 420;   // 归一化到 ±1 左右
+    const dy = (p.y - (b.y + b.height / 2)) / 420;
+    sendWin('cursor', { x: Math.max(-1, Math.min(1, dx)), y: Math.max(-1, Math.min(1, dy)) });
+  } catch {}
+}, 120);
 
 ipcMain.on('context-menu', () => {
   if (!win) return;

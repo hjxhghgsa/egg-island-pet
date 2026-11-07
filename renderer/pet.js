@@ -39,7 +39,9 @@ const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
 
 // 相机按模型高度自适应，人物和宠物都能占满画面约 3/4
 function frameCamera(height) {
-  camera.position.set(0, height * 0.58, height * 1.98);   // 拉近一点，让她把画面撑满
+  // 取景：人物占画面约 3/4，头顶和脚下都留出呼吸空间。
+  // 2.0 倍距离时她占 89%，贴着上下边，看着闷；2.3 倍约 76%，最舒服。
+  camera.position.set(0, height * 0.56, height * 2.3);
   camera.lookAt(0, height * 0.5, 0);
   camera.updateProjectionMatrix();
 }
@@ -67,6 +69,35 @@ scene.add(holder);
 
 const spinner = new THREE.Group();  // 负责朝向摆动
 holder.add(spinner);
+
+/* ---------------- 地面软阴影 ----------------
+   桌宠最容易显得「贴在屏幕上」的原因就是没有影子。
+   一张径向渐变的椭圆贴在 y≈0，跳起来时缩小变淡，落地恢复。 */
+function softShadowTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(64, 64, 4, 64, 64, 62);
+  grd.addColorStop(0, 'rgba(58,46,50,.34)');
+  grd.addColorStop(0.5, 'rgba(58,46,50,.14)');
+  grd.addColorStop(1, 'rgba(58,46,50,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const groundShadow = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.72, 0.72),
+  new THREE.MeshBasicMaterial({
+    map: softShadowTexture(), transparent: true, depthWrite: false, opacity: 0.7
+  })
+);
+groundShadow.rotation.x = -Math.PI / 2;
+groundShadow.position.y = 0.004;
+groundShadow.renderOrder = -1;
+holder.add(groundShadow);
 
 /* ---------------- 3D 柔光粒子 ----------------
    照蛋岛原站星星 shader 的思路写的软核 + 星芒粒子，替换掉之前的 CSS 圆点。
@@ -138,7 +169,7 @@ const fairyGlow = new THREE.Sprite(new THREE.SpriteMaterial({
   transparent: true, depthWrite: false, depthTest: false,
   toneMapped: false
 }));
-fairyGlow.scale.setScalar(0.17);   // 0.34 时像在它背后挂了张粉色光盘
+fairyGlow.scale.setScalar(0.1);    // 再小一点，之前那团光比它本体还抢眼
 fairyGlow.renderOrder = 1;
 fairy.add(fairyGlow);
 
@@ -934,7 +965,6 @@ let tapTimer = null;
 let dblTimer = null;
 let musicTimer = null;
 let comboMode = false;       // 已判定为连击：期间稳住角色、不乱切歌、不误开聊天
-let patrolDir = 0;           // 窗口巡逻方向：0=原地，±1=往左右跑
 const POUNCE_CYCLE = 3.2;    // 扑一次多久
 let pounceCrouch = 0;        // 蹲伏蓄力 0~1
 let pounceLeap = 0;          // 腾空扑出 0~1
@@ -1156,7 +1186,7 @@ function tick() {
       // 平时飘在身侧，别趴在头顶挡脸
       fairy.position.set(Math.sin(t * spd) * 0.16 + 0.34, 0.66 + Math.sin(t * 1.9) * 0.09, fz);
     }
-    fairyGlow.material.opacity = 0.30 + Math.sin(t * 4) * 0.08;
+    fairyGlow.material.opacity = 0.16 + Math.sin(t * 4) * 0.05;
     if (eggRoot) {
       eggBounce = Math.max(0, eggBounce - dt * 1.8);
       eggRoot.position.y = eggBounce * 0.09 + Math.sin(t * 2.3) * 0.012;
@@ -1376,6 +1406,15 @@ function tick() {
         pitchBone(rig, leg.foot, ((onSwing ? -0.08 : -0.06) + kick * 0.18 + side * 0.01) * sitBlend);
       }
     }
+    // 视线跟随：头先转，身体跟一点点。拖动旋转时不要抢，保持用户控制
+    if (!dragging && act !== 'spin') {
+      const hy = Math.max(-0.42, Math.min(0.42, gazeX * 0.42));
+      const hp = Math.max(-0.26, Math.min(0.26, gazeY * 0.26));
+      pitchBone(rig, rig.head, hy, 'y');
+      pitchBone(rig, rig.head, hp, 'x');
+      pitchBone(rig, rig.chest, hy * 0.35, 'y');
+    }
+
     softenHands(rig, act === 'wave', t);
 
     // 跑起来要「颠」：只迈腿不上下起伏，看着就是在滑
@@ -1411,8 +1450,14 @@ function tick() {
 
   if (act !== lastActSent) {
     lastActSent = act;
-    window.pet?.patrol?.(false);             // 扑小蛋是原地动作，窗口不再满屏跑
   }
+
+  // 影子跟着高度变化：跳起来缩小、变淡，落地恢复，才有「踩在地上」的感觉
+  const lift = Math.max(0, spinner.position.y - baseY);
+  const shrink = Math.max(0.45, 1 - lift * 0.9);
+  groundShadow.scale.setScalar(shrink);
+  groundShadow.material.opacity = 0.7 * Math.min(1, shrink + 0.15);
+  groundShadow.position.x = spinner.position.x * 0.85;
 
   sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算
   renderer.render(scene, camera);
@@ -1489,7 +1534,13 @@ window.pet?.onSwitchModel((k) => {
 });
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });
-window.pet?.onPatrolDir?.((d) => { patrolDir = d | 0; });
+// 视线跟随：鼠标在屏幕哪边，她就微微转头看过去（幅度很小，别像扭脖子）
+let gazeX = 0, gazeY = 0;
+window.pet?.onCursor?.((d) => {
+  if (!d) return;
+  gazeX += ((d.x || 0) - gazeX) * 0.35;
+  gazeY += ((d.y || 0) - gazeY) * 0.35;
+});
 // 录音时音乐暂停，录完再续上
 let duckedMusic = false;
 window.pet?.onVoiceDuck?.((on) => {
