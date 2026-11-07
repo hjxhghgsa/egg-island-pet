@@ -19,10 +19,100 @@
     white-space: pre-wrap; overflow: auto;
   }
   #err.show { display: block; }
+
+  /* ---------- 特效层：纯 DOM，透明窗口里比 WebGL 精灵更醒目 ---------- */
+  #fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .fx-bit {
+    position: absolute; line-height: 1; will-change: transform, opacity;
+    text-shadow: 0 0 9px currentColor, 0 2px 5px rgba(120,60,90,.28);
+    animation: fxFloat var(--dur) cubic-bezier(.2,.72,.3,1) var(--delay) forwards;
+  }
+  @keyframes fxFloat {
+    0%   { transform: translate(0,0) scale(.4) rotate(0deg); opacity: 0; }
+    16%  { opacity: 1; }
+    72%  { opacity: 1; }
+    100% { transform: translate(var(--dx), var(--dy)) scale(1.18) rotate(var(--rot)); opacity: 0; }
+  }
+
+  /* 花开：六片花瓣从中心展开再淡出 */
+  .fx-flower {
+    position: absolute; width: 0; height: 0;
+    animation: fxBloom var(--dur) ease-out forwards;
+  }
+  .fx-flower i {
+    position: absolute; left: -5px; top: -11px; width: 10px; height: 14px;
+    border-radius: 60% 60% 55% 55%;
+    background: var(--petal);
+    box-shadow: 0 0 8px var(--petal);
+    transform-origin: 50% 11px;
+    animation: petalOpen var(--dur) cubic-bezier(.2,.8,.3,1) forwards;
+  }
+  .fx-flower b {
+    position: absolute; left: -3.5px; top: -3.5px; width: 7px; height: 7px;
+    border-radius: 50%; background: #fff6c9; box-shadow: 0 0 9px #ffd76e;
+    animation: corePop var(--dur) ease-out forwards;
+  }
+  @keyframes petalOpen {
+    0%   { transform: rotate(var(--a)) translateY(0) scale(.05); opacity: 0; }
+    32%  { transform: rotate(var(--a)) translateY(-9px) scale(1); opacity: 1; }
+    74%  { opacity: 1; }
+    100% { transform: rotate(var(--a)) translateY(-11px) scale(.86); opacity: 0; }
+  }
+  @keyframes corePop {
+    0% { transform: scale(.1); opacity: 0; }
+    30% { transform: scale(1); opacity: 1; }
+    74% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes fxBloom { 0% { opacity: 0; } 18% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
+
+  /* 飘落的花瓣 */
+  .fx-flake {
+    position: absolute; line-height: 1; text-shadow: 0 0 8px currentColor;
+    animation: flakeFall var(--dur) linear var(--delay) forwards;
+  }
+  @keyframes flakeFall {
+    0%   { transform: translate(0,0) rotate(0deg); opacity: 0; }
+    12%  { opacity: .95; }
+    100% { transform: translate(var(--dx), 250px) rotate(320deg); opacity: 0; }
+  }
+
+  /* 说话气泡：半透明玻璃 + 柔光 + 指向角色的小尖角 */
+  #bubble {
+    position: fixed; left: 50%; top: 4%; transform: translate(-50%, 0);
+    pointer-events: none; opacity: 0; z-index: 3;
+    max-width: 150px; padding: 6px 11px; border-radius: 16px;
+    font: 600 11.5px/1.45 "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #6d4a5e; text-align: center; white-space: normal;
+    background: rgba(255,255,255,.56);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,.82);
+    box-shadow: 0 6px 26px rgba(188,116,158,.22),
+                inset 0 1px 0 rgba(255,255,255,.92),
+                inset 0 -1px 0 rgba(255,255,255,.35);
+  }
+  #bubble::after {
+    content: ""; position: absolute; left: 50%; bottom: -7px;
+    width: 12px; height: 12px; border-radius: 0 0 4px 0;
+    background: rgba(255,255,255,.56);
+    border-right: 1px solid rgba(255,255,255,.82);
+    border-bottom: 1px solid rgba(255,255,255,.82);
+    transform: translateX(-50%) rotate(45deg);
+  }
+  #bubble.show { animation: bubblePop var(--bdur, 4.6s) ease forwards; }
+  @keyframes bubblePop {
+    0%   { opacity: 0; transform: translate(-50%, 10px) scale(.82); }
+    7%   { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    86%  { opacity: 1; transform: translate(-50%, -3px) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -12px) scale(.96); }
+  }
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
+<div id="fx"></div>
+<div id="bubble"></div>
 <div id="err"></div>
 <script>
   // 加载失败时把错误显示在窗口里，别白屏

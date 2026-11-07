@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer, shell, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, screen, nativeImage, dialog, desktopCapturer, shell, globalShortcut, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -8,6 +8,8 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // Chromium 默认禁止 file:// 页面加载 ES module，桌面应用需要放开
 app.commandLine.appendSwitch('allow-file-access-from-files');
 
+// Windows 上系统通知要有 AppUserModelId 才弹得出来
+app.setAppUserModelId('com.mumu.eggislandpet');
 // 开发跑和打包跑的用户目录统一，歌单/设置才能共用
 app.setPath('userData', path.join(app.getPath('appData'), 'EggIslandPet'));
 
@@ -47,8 +49,8 @@ function ensureThreeCore() {
   });
 }
 
-const WIN_W = 220;
-const WIN_H = 220;
+const WIN_W = 200;
+const WIN_H = 200;
 
 const settingsPath = () => path.join(app.getPath('userData'), 'pet-settings.json');
 
@@ -108,6 +110,17 @@ function createWindow() {
   // 默认鼠标穿透透明区域，渲染层检测到悬停在宠物身上时再打开点击
   win.setIgnoreMouseEvents(true, { forward: true });
 
+  // 长按右键拖动时，系统偶尔会把透明窗口撑大；尺寸一偏离就锁回来
+  win.on('resize', () => {
+    if (!win || win.isDestroyed()) return;
+    try {
+      const b = win.getBounds();
+      if (b.width !== WIN_W || b.height !== WIN_H) {
+        win.setBounds({ x: b.x, y: b.y, width: WIN_W, height: WIN_H });
+      }
+    } catch {}
+  });
+
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   win.once('ready-to-show', () => {
@@ -149,6 +162,13 @@ function createWindow() {
 function summon() {
   if (!win || win.isDestroyed()) return createWindow();
   if (autoHideTimer) { clearTimeout(autoHideTimer); autoHideTimer = null; }
+  // 攒着的提醒，召唤时一次性说给主人听
+  if (pendingSays.length) {
+    const line = pendingSays.splice(0).join('  /  ');
+    setTimeout(() => {
+      if (win && !win.isDestroyed()) win.webContents.send('pet-say', { text: line });
+    }, 450);
+  }
   userTouched = true;
   if (!win.isVisible()) {
     win.show();
@@ -260,6 +280,58 @@ app.whenReady().then(async () => {
       } catch (e) { console.error('[music-test fail]', e.message); }
     }, 5000);
   }
+  if (process.env.PET_ACT) {
+    setTimeout(() => {
+      try {
+        win.webContents.executeJavaScript(`window.__pet.setAct(${JSON.stringify(process.env.PET_ACT)}, 40); 'ok'`)
+          .catch(() => {});
+      } catch (e) { console.error('[act fail]', e.message); }
+    }, 6000);
+    // 截图前一秒再放粒子，不然等截图时已经飘没了
+    const delay = Number(process.env.PET_SHOT_DELAY || 9000) - 450;
+    setTimeout(() => {
+      try { win.webContents.executeJavaScript(`window.__pet.pop(12); 'popped'`).then(r => console.log('[pop]', r)).catch(e => console.error('[pop fail]', e.message)); }
+      catch {}
+    }, Math.max(1000, delay));
+  }
+  // 调试：把角色转开，几秒后看 debug 里的 yaw 是否自己回到 0
+  if (process.env.PET_FACE) {
+    setTimeout(() => {
+      win.webContents.executeJavaScript(`window.__pet.setYaw(1.2); 'set'`).catch(() => {});
+      console.log('[face] set yaw = 1.2');
+    }, 5000);
+  }
+  // 调试：模拟右键「看看我在干嘛」，结果会写进 __pet.lastLook
+  if (process.env.PET_LOOK) {
+    setTimeout(() => {
+      if (win && !win.isDestroyed()) win.webContents.send('pet-look');
+      console.log('[look] sent');
+    }, 6000);
+  }
+  // 调试：模拟一次提醒，看气泡是不是半透明、像在说话
+  if (process.env.PET_SAY) {
+    setTimeout(() => { petSay(process.env.PET_SAY); console.log('[say] sent'); }, 7500);
+  }
+  if (process.env.PET_TTS_PLAY) {
+    setTimeout(async () => {
+      try {
+        const r = await win.webContents.executeJavaScript(`
+          (async () => {
+            const url = await window.pet.tts('测试播放，一二三四五');
+            const a = new Audio(url);
+            try {
+              await a.play();
+              await new Promise(r => setTimeout(r, 800));
+              return 'PLAYING dur=' + a.duration + ' paused=' + a.paused + ' err=' + (a.error ? a.error.code : 'none');
+            } catch (e) {
+              return 'PLAY_REJECTED ' + e.name + ' ' + e.message;
+            }
+          })()
+        `);
+        console.log('[tts-play]', r);
+      } catch (e) { console.error('[tts-play fail]', e.message); }
+    }, 7000);
+  }
   if (process.env.PET_TTS) {
     setTimeout(async () => {
       try {
@@ -297,7 +369,7 @@ app.whenReady().then(async () => {
     setTimeout(async () => {
       try {
         const dbg = await win.webContents.executeJavaScript(
-          `JSON.stringify({state: window.__pet, w: innerWidth, h: innerHeight})`
+          `JSON.stringify({state: window.__pet, w: innerWidth, h: innerHeight, fx: document.getElementById('fx').children.length, bits: [...document.getElementById('fx').children].slice(0,3).map(e => ({t: e.textContent, o: getComputedStyle(e).opacity, c: e.style.color})), yaw: window.__pet.yaw()})`
         );
         console.log('[debug]', dbg);
         const px = await win.webContents.executeJavaScript(`(() => {
@@ -337,6 +409,7 @@ app.whenReady().then(async () => {
   }
 
   app.on('activate', () => { if (!win) createWindow(); });
+  startCare();          // 小蛋的陪伴 / 护眼 / 喝水 / 久坐提醒
 });
 
 app.on('window-all-closed', () => {
@@ -356,17 +429,28 @@ ipcMain.on('hover-state', (_e, hovering) => {
 });
 
 // 拖动：渲染层按下后，主进程跟踪光标
+let lastDragPoint = null;
 ipcMain.on('drag-start', () => {
   if (!win) return;
   const cursor = screen.getCursorScreenPoint();
   const b = win.getBounds();
   dragOrigin = { dx: cursor.x - b.x, dy: cursor.y - b.y };
+  lastDragPoint = null;
 });
 
 ipcMain.on('drag-move', () => {
   if (!win || !dragOrigin) return;
   const cursor = screen.getCursorScreenPoint();
-  win.setPosition(cursor.x - dragOrigin.dx, cursor.y - dragOrigin.dy);
+  // 光标没动就别反复 setBounds，长按右键时才不会一直重绘
+  if (lastDragPoint && cursor.x === lastDragPoint.x && cursor.y === lastDragPoint.y) return;
+  lastDragPoint = { x: cursor.x, y: cursor.y };
+  // 带尺寸一起写，保证拖动过程中窗口永远不会被拉大
+  win.setBounds({
+    x: cursor.x - dragOrigin.dx,
+    y: cursor.y - dragOrigin.dy,
+    width: WIN_W,
+    height: WIN_H
+  });
 });
 
 ipcMain.on('drag-end', () => {
@@ -608,10 +692,123 @@ ipcMain.handle('chat', async (_e, messages) => {
   return out.trim();
 });
 
+/* ---------------- 小蛋助手：陪伴 / 健康提醒 / 番茄钟 ----------------
+   能力参考 GitHub 上的 DeskPet Live2D、Toty、SUDARI：都是把提醒做成
+   角色的一句话，而不是冷冰冰的系统弹窗；再加番茄钟和屏幕/剪贴板感知。 */
+const CARE = {
+  eye:   ['看看远处 20 秒～', '眨眨眼，歇一下', '抬眼看看窗外吧'],
+  water: ['喝口水吧～', '杯子空了，添点水', '补点水再继续'],
+  move:  ['起来伸个懒腰吧', '肩膀紧了吧，动一动', '走两步，别久坐'],
+  late:  ['这么晚啦，早点收工', '今天够了，休息吧', '我陪你，但别熬太狠'],
+  mood:  ['我在呢，慢慢来', '歇会儿也没关系', '今天也辛苦啦',
+          '刚才那下挺利索', '深呼吸一下，不急', '有我陪着你呢']
+};
+const pickLine = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+let peekTimer = null;
+const pendingSays = [];
+
+function petSay(text) {
+  if (!win || win.isDestroyed()) return;
+  // 关掉「露脸」时先攒着，等召唤一起说，不破坏「不常驻」的要求
+  if (readSettings().peekOn === false) {
+    pendingSays.push(text);
+    if (pendingSays.length > 3) pendingSays.shift();
+    return;
+  }
+  const wasHidden = !win.isVisible();
+  if (wasHidden) {
+    win.show();
+    win.setAlwaysOnTop(true, 'screen-saver');
+  }
+  // 只用角色身上的半透明气泡说话，不弹系统通知
+  win.webContents.send('pet-say', { text });
+  if (wasHidden) {
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => {
+      if (win && !win.isDestroyed() && !win.isFocused()) win.hide();
+    }, 5600);
+  }
+}
+
+let careTick = null;
+let lastEye = Date.now();
+let lastWater = Date.now();
+let lastMove = Date.now();
+let lastMood = Date.now();
+let lastLate = Date.now();
+let pomoTimer = null;
+let pomoBreakTimer = null;
+
+function startCare() {
+  clearInterval(careTick);
+  careTick = setInterval(() => {
+    const s = readSettings();
+    const now = Date.now();
+    const eyeMin = Number.isFinite(s.eyeMinutes) ? s.eyeMinutes : 30;
+    if (eyeMin > 0 && now - lastEye >= eyeMin * 60000) {
+      petSay(pickLine(CARE.eye), '小蛋 · 护眼'); lastEye = now; return;
+    }
+    if (now - lastWater >= 60 * 60000) {
+      petSay(pickLine(CARE.water), '小蛋 · 喝水'); lastWater = now; return;
+    }
+    if (now - lastMove >= 90 * 60000) {
+      petSay(pickLine(CARE.move), '小蛋 · 起身'); lastMove = now; return;
+    }
+    const h = new Date().getHours();
+    if ((h >= 23 || h < 3) && now - lastLate >= 30 * 60000) {
+      petSay(pickLine(CARE.late), '小蛋 · 早点睡'); lastLate = now; return;
+    }
+    if (s.careOn !== false && now - lastMood >= 28 * 60000) {
+      petSay(pickLine(CARE.mood), '小蛋想说'); lastMood = now;
+    }
+  }, 30000);
+}
+
+function startPomodoro() {
+  stopPomodoro();
+  petSay('一起专注 25 分钟');
+  pomoTimer = setTimeout(() => {
+    pomoTimer = null;
+    petSay('25 分钟到啦，走走吧');
+    if (win && !win.isDestroyed()) win.webContents.send('pet-celebrate', 8);
+    pomoBreakTimer = setTimeout(() => {
+      pomoBreakTimer = null;
+      petSay('休息够了，回来吧');
+    }, 5 * 60000);
+  }, 25 * 60000);
+}
+
+function stopPomodoro() {
+  if (pomoTimer) { clearTimeout(pomoTimer); pomoTimer = null; }
+  if (pomoBreakTimer) { clearTimeout(pomoBreakTimer); pomoBreakTimer = null; }
+}
+
+ipcMain.handle('read-clipboard', () => {
+  try { return clipboard.readText(); } catch { return ''; }
+});
+
+ipcMain.on('pet-notify', (_e, d) => {
+  petSay(String((d && d.body) || ''));
+});
+
 /* 右键菜单 */
 const MODEL_MENU = [
   { key: 'cake', label: '蛋糕纯' },
   { key: 'jade', label: '珠玉纯' }
+];
+const ACT_MENU = [
+  { key: 'idle',  label: '站着发呆' },
+  { key: 'sit',   label: '坐一会儿' },
+  { key: 'swing', label: '荡秋千' },
+  { key: 'spin',  label: '转个圈' },
+  { key: 'hop',   label: '蹦蹦跳' },
+  { key: 'walk',  label: '散步开花' },
+  { key: 'bloom', label: '满地开花' },
+  { key: 'wave',  label: '挥手打招呼' },
+  { key: 'float', label: '飘起来' },
+  { key: 'chase', label: '追小精灵' },
+  { key: 'sleep', label: '打瞌睡' }
 ];
 
 ipcMain.on('context-menu', () => {
@@ -625,6 +822,53 @@ ipcMain.on('context-menu', () => {
     },
     { label: '下一首', click: () => win && win.webContents.send('next-track') },
     { label: '打开音乐文件夹', click: () => { ensureMusicDir(); shell.openPath(musicDir()); } },
+    { type: 'separator' },
+    {
+      label: '小蛋助手',
+      submenu: [
+        { label: '看看我在干嘛（截屏问 AI）', click: () => win && win.webContents.send('pet-look') },
+        { label: '复制的内容帮我看看', click: () => win && win.webContents.send('pet-clip') },
+        { type: 'separator' },
+        { label: '开始专注 25 分钟', click: startPomodoro },
+        { label: '停止专注', click: () => { stopPomodoro(); petSay('好，先不计时啦'); } },
+        { type: 'separator' },
+        {
+          label: '护眼提醒间隔',
+          submenu: [20, 30, 45, 60, 0].map((m) => ({
+            label: m ? m + ' 分钟' : '关掉',
+            type: 'radio',
+            checked: (readSettings().eyeMinutes ?? 30) === m,
+            click: () => {
+              writeSettings({ eyeMinutes: m });
+              lastEye = Date.now();
+              petSay(m ? '护眼提醒改成每 ' + m + ' 分钟' : '护眼提醒关掉啦');
+            }
+          }))
+        },
+        {
+          label: '情绪陪伴',
+          type: 'checkbox',
+          checked: readSettings().careOn !== false,
+          click: (mi) => writeSettings({ careOn: mi.checked })
+        },
+        {
+          label: '提醒时露个脸说',
+          type: 'checkbox',
+          checked: readSettings().peekOn !== false,
+          click: (mi) => writeSettings({ peekOn: mi.checked })
+        }
+      ]
+    },
+    { type: 'separator' },
+    { label: '换个节目 (A)', click: () => win && win.webContents.send('next-act') },
+    {
+      label: '待机节目',
+      submenu: ACT_MENU.map((a) => ({
+        label: a.label,
+        click: () => win && win.webContents.send('set-act', a.key)
+      }))
+    },
+    { label: '小蛋 开 / 关 (F)', click: () => win && win.webContents.send('toggle-fairy') },
     { type: 'separator' },
     {
       label: '换个角色',

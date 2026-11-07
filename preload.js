@@ -25,5 +25,14 @@ contextBridge.exposeInMainWorld('pet', {
   onSummon: (cb) => ipcRenderer.on('summon', () => cb()),
   touch: () => ipcRenderer.send('user-touch'),
   onApplySettings: (cb) => ipcRenderer.on('apply-settings', (_e, s) => cb(s)),
-  onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k))
+  onSwitchModel: (cb) => ipcRenderer.on('switch-model', (_e, k) => cb(k)),
+  onSetAct: (cb) => ipcRenderer.on('set-act', (_e, name) => cb(name)),
+  onNextAct: (cb) => ipcRenderer.on('next-act', () => cb()),
+  onToggleFairy: (cb) => ipcRenderer.on('toggle-fairy', () => cb()),
+  onPetSay: (cb) => ipcRenderer.on('pet-say', (_e, d) => cb(d)),
+  onPetCelebrate: (cb) => ipcRenderer.on('pet-celebrate', (_e, n) => cb(n)),
+  onPetLook: (cb) => ipcRenderer.on('pet-look', () => cb()),
+  onPetClip: (cb) => ipcRenderer.on('pet-clip', () => cb()),
+  readClipboard: () => ipcRenderer.invoke('read-clipboard'),
+  notify: (title, body) => ipcRenderer.send('pet-notify', { title, body })
 });
