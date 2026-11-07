@@ -12,3 +12,5 @@ _verify_asr.js
 _tune_asr.js
 _test_para.js
 .DS_Store
+_ref/
+_dist*.log
