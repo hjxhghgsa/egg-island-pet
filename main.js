@@ -110,6 +110,7 @@ function showPet({ focus = false } = {}) {
 }
 
 function hidePet() {
+  patrolStop();
   if (!win || win.isDestroyed() || !win.isVisible()) return;
   win.webContents.send('pet-pause');
   win.hide();
@@ -436,7 +437,7 @@ app.whenReady().then(async () => {
         console.log('[eval]', r);
       } catch (e) { console.log('[eval err]', e.message); }
       app.isQuitting = true; app.quit();
-    }, 5000);
+    }, Number(process.env.PET_EVAL_DELAY || 5000));
   }
 
   // 调试：PET_CLICK=1 模拟连续点击，验证单点/双击/连击识别
@@ -577,6 +578,17 @@ app.whenReady().then(async () => {
       } catch (e) { log('ERR ' + e.message); }
     }, 2000);
   }
+  // 调试：PET_SHOT_WIN=路径 只截宠物窗口自己（含 WebGL，不含 DOM 特效，用来检查 3D 姿态）
+  if (process.env.PET_SHOT_WIN) {
+    setTimeout(async () => {
+      try {
+        const img = await win.webContents.capturePage();
+        fs.writeFileSync(process.env.PET_SHOT_WIN, img.toPNG());
+        console.log('win shot saved');
+      } catch (e) { console.log('win shot fail', e.message); }
+    }, Number(process.env.PET_SHOT_DELAY || 4500));
+  }
+
   if (process.env.PET_SHOT) {
     setTimeout(async () => {
       try {
@@ -646,6 +658,7 @@ ipcMain.on('hover-state', (_e, hovering) => {
 let lastDragPoint = null;
 ipcMain.on('drag-start', () => {
   if (!win) return;
+  patrolStop();                     // 手动拖她的时候别再自己跑
   const cursor = screen.getCursorScreenPoint();
   const b = win.getBounds();
   dragOrigin = { dx: cursor.x - b.x, dy: cursor.y - b.y };
@@ -1255,6 +1268,46 @@ const sendWin = (ch, ...args) => {
 
 // 按住说话期间把音乐掐掉：外放的歌会被麦克风原样录进去，识别成「放歌」指令
 ipcMain.on('voice-duck', (_e, on) => sendWin('voice-duck', !!on));
+
+/* ---------------- 追小精灵：窗口带着她满屏跑 ----------------
+   200×200 的窗口里横移最多几十像素，看着就是原地晃。要「整屏跑」只有一条路：
+   让窗口自己在屏幕上巡逻，角色在窗口内保持居中。 */
+let patrolTimer = null;
+let patrolHomeX = null;
+let patrolX = 0;
+let patrolDir = 1;
+
+function patrolStop() {
+  if (!patrolTimer) return;
+  clearInterval(patrolTimer);
+  patrolTimer = null;
+  if (patrolHomeX != null && win && !win.isDestroyed()) {
+    win.setBounds({ x: Math.round(patrolHomeX), y: win.getBounds().y, width: WIN_W, height: WIN_H });
+  }
+  patrolHomeX = null;
+  sendWin('patrol-dir', 0);
+}
+
+function patrolStart() {
+  if (patrolTimer || !win || win.isDestroyed()) return;
+  const b = win.getBounds();
+  const area = screen.getDisplayMatching(b).workArea;
+  patrolHomeX = b.x;
+  patrolX = b.x;
+  patrolDir = 1;
+  patrolTimer = setInterval(() => {
+    if (!win || win.isDestroyed() || !win.isVisible()) { patrolStop(); return; }
+    const maxX = area.x + area.width - WIN_W;
+    patrolX += patrolDir * 6.4;                       // 30fps × 6.4px ≈ 190px/s
+    if (patrolX >= maxX) { patrolX = maxX; patrolDir = -1; }
+    if (patrolX <= area.x) { patrolX = area.x; patrolDir = 1; }
+    if (process.env.PET_DEBUG && Math.round(patrolX) % 240 < 7) console.log('[patrol]', Math.round(patrolX));
+    win.setBounds({ x: Math.round(patrolX), y: b.y, width: WIN_W, height: WIN_H });
+    sendWin('patrol-dir', patrolDir);
+  }, 33);
+}
+
+ipcMain.on('patrol', (_e, on) => { on ? patrolStart() : patrolStop(); });
 
 ipcMain.on('context-menu', () => {
   if (!win) return;

@@ -101,7 +101,7 @@ for (const x of [-0.3, 0.3]) {
 }
 // 板子往后退一点，人坐在板前沿，避免从腰里穿过去
 const seat = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.05, 0.30), woodMat);
-seat.position.set(0, SEAT_Y, 0.03);
+seat.position.set(0, SEAT_Y, -0.07);
 swingGroup.add(seat);
 
 // 蛋糕纯 hipY≈0.419、珠玉纯≈0.472，体型不一样；座板和绳长得跟着换，
@@ -934,6 +934,8 @@ let tapTimer = null;
 let dblTimer = null;
 let musicTimer = null;
 let comboMode = false;       // 已判定为连击：期间稳住角色、不乱切歌、不误开聊天
+let patrolDir = 0;           // 窗口巡逻方向：0=原地，±1=往左右跑
+let lastActSent = null;
 
 const CLICK_GAP = 430;        // 两次点击间隔小于它算「连续」
 const COMBO_IDLE = 1200;       // 多久没点就退出连击
@@ -1019,6 +1021,12 @@ window.addEventListener('dblclick', (ev) => {
 });
 
 window.__pet.clickState = () => ({ combo: tapCount, comboMode, gap: performance.now() - lastTapAt });
+window.__pet.rigInfo = () => {
+  const r = modelRoot && modelRoot.userData.islandRig;
+  if (!r) return 'no rig';
+  return JSON.stringify({ act, blend: +r.blend.toFixed(2), speed: +r.speed.toFixed(2),
+    phase: +r.phase.toFixed(2), float: +r.floatBlend.toFixed(2) });
+};
 window.__THREE = THREE;
 window.__pet.spark = (n) => { popBits('star', n || 20); return 'ok'; };
 window.__pet.fxDebug = () => {
@@ -1187,7 +1195,8 @@ function tick() {
   // 散步：左右走，脚下每落一步就开一朵花
   // 追小精灵：真的跑起来，横跨整个窗口追，而不是站在原地转身
   if (act === 'chase') {
-    walkX = Math.sin(t * 1.15) * 0.62;
+    // 窗口已经在屏幕上跑，人物在窗口内只做小幅晃动，否则会跑出窗口
+    walkX = Math.sin(t * 1.15) * (patrolDir ? 0.10 : 0.55);
     walkTimer -= dt;
     if (walkTimer <= 0) {
       walkTimer = 0.30;
@@ -1261,12 +1270,12 @@ function tick() {
   sitBlend += (wantSit - sitBlend) * Math.min(1, dt * 5);
   const floatLift = act === 'float' ? 0.12 + Math.sin(t * 1.3) * 0.06 : 0;
   // 座板已经抬到髋部高度，人只需轻轻压实，别再把整个人往下拽 0.18
-  const seatDrop = act === 'swing' ? -0.035 * sitBlend
+  const seatDrop = act === 'swing' ? 0.005 * sitBlend
     : ((act === 'sit' || act === 'sleep') ? -0.13 * sitBlend : 0);
 
   spinner.position.y = baseY + bob + jumpY + floatLift + seatDrop;
   // 坐上去时身体微微往前，落在板前沿，而不是被板子从腰里穿过
-  const wantZ = act === 'swing' ? 0.03 * sitBlend : 0;
+  const wantZ = act === 'swing' ? -0.01 * sitBlend : 0;
   spinner.position.z += (wantZ - spinner.position.z) * Math.min(1, dt * 5);
   spinner.scale.set(
     1 + (1 - squash) * 0.55,
@@ -1278,7 +1287,9 @@ function tick() {
      之前「老在转」有两个原因：静置时叠了 ±0.16 的 idleSway 左右摇，
      加上追小精灵时整个人转 ±0.55 —— 现在都收掉，默认永远朝前。 */
   if (act === 'chase') {
-    yaw = Math.sin(t * 2.1) * 0.16;       // 追着小精灵只要一点点侧身，不是整个转圈
+    // 巡逻时朝跑动方向侧身（0.8rad ≈ 45°，看着像在往前跑而不是横着飘）
+    const wantYaw = patrolDir ? patrolDir * -0.8 : Math.sin(t * 2.1) * 0.16;
+    yaw += (wantYaw - yaw) * Math.min(1, dt * 7);
     yawVel = 0;
     lastRotateAt = now;
   } else if (act === 'spin') {
@@ -1304,7 +1315,10 @@ function tick() {
 
   /* 骨骼 */
   if (rigReady && modelRoot) {
-    const floatAmt = act === 'float' ? 1 : (act === 'swing' ? 0.55 : (act === 'walk' ? 0 : 0.85));
+    // floating 会把腿部行走动画乘掉（blend *= 1-float），chase 必须给 0，
+    // 否则 speed 再大也只会「飘着平移」——之前就是脚不动的原因
+    const floatAmt = act === 'float' ? 1
+      : (act === 'swing' ? 0.55 : ((act === 'walk' || act === 'chase') ? 0 : 0.85));
     updateRig(modelRoot, {
       time: t,
       dt,
@@ -1325,13 +1339,18 @@ function tick() {
       for (const leg of rig.legs) {
         const side = leg.side === 'Left' ? 1 : -1;
         // 坐（sit/sleep）仍走「往裙摆后面收」，只露鞋尖
-        pitchBone(rig, leg.upper, ((onSwing ? -0.92 : 0.30) + kick * 0.20) * sitBlend);
-        pitchBone(rig, leg.lower, ((onSwing ? 1.05 : -0.24) - kick * 0.16) * sitBlend);
-        pitchBone(rig, leg.foot, ((onSwing ? -0.10 : -0.06) + kick * 0.22 + side * 0.01) * sitBlend);
+        pitchBone(rig, leg.upper, ((onSwing ? 0.12 : 0.30) + kick * 0.14) * sitBlend);
+        pitchBone(rig, leg.lower, ((onSwing ? 0.75 : -0.24) - kick * 0.12) * sitBlend);
+        pitchBone(rig, leg.foot, ((onSwing ? -0.08 : -0.06) + kick * 0.18 + side * 0.01) * sitBlend);
       }
     }
     softenHands(rig, act === 'wave', t);
     modelRoot.updateWorldMatrix(true, true);
+  }
+
+  if (act !== lastActSent) {
+    lastActSent = act;
+    window.pet?.patrol?.(act === 'chase');   // 只有追小精灵才满屏跑
   }
 
   sparks.update(t);                      // 粒子全靠 shader 里的 uTime 推进，CPU 不逐颗算
@@ -1409,6 +1428,7 @@ window.pet?.onSwitchModel((k) => {
 });
 
 window.pet?.onToggleMusic(() => { toggleMusic(); });
+window.pet?.onPatrolDir?.((d) => { patrolDir = d | 0; });
 // 录音时音乐暂停，录完再续上
 let duckedMusic = false;
 window.pet?.onVoiceDuck?.((on) => {
